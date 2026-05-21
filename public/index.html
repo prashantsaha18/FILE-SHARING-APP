@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FileVault – Secure File Server</title>
+  <meta name="description" content="FileVault is a cross-platform, secure GUI-based file server with multi-user support, file sharing, and an admin dashboard." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ════════════════ AUTH OVERLAY ════════════════ -->
+<div id="auth-overlay" class="auth-overlay">
+  <div class="auth-bg-orbs">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+  <div class="auth-card glass">
+    <div class="auth-logo">
+      <div class="logo-icon"><i data-lucide="hard-drive"></i></div>
+      <h1 class="auth-brand">FileVault</h1>
+      <p class="auth-tagline">Your secure file server</p>
+    </div>
+
+    <!-- Tab switcher -->
+    <div class="auth-tabs">
+      <button id="tab-login" class="auth-tab active" onclick="switchAuthTab('login')">Sign In</button>
+      <button id="tab-register" class="auth-tab" onclick="switchAuthTab('register')">Sign Up</button>
+    </div>
+
+    <!-- Login form -->
+    <form id="login-form" class="auth-form" onsubmit="handleLogin(event)">
+      <div class="input-group">
+        <i data-lucide="user" class="input-icon"></i>
+        <input id="login-username" type="text" placeholder="Username" required autocomplete="username" />
+      </div>
+      <div class="input-group">
+        <i data-lucide="lock" class="input-icon"></i>
+        <input id="login-password" type="password" placeholder="Password" required autocomplete="current-password" />
+      </div>
+      <button type="submit" class="btn btn-primary btn-block" id="login-btn">
+        <i data-lucide="log-in"></i> Sign In
+      </button>
+      <p id="login-error" class="auth-error"></p>
+    </form>
+
+    <!-- Register form -->
+    <form id="register-form" class="auth-form hidden" onsubmit="handleRegister(event)">
+      <div class="input-group">
+        <i data-lucide="user" class="input-icon"></i>
+        <input id="reg-username" type="text" placeholder="Username (3-20 chars)" required />
+      </div>
+      <div class="input-group">
+        <i data-lucide="mail" class="input-icon"></i>
+        <input id="reg-email" type="email" placeholder="Email (optional)" />
+      </div>
+      <div class="input-group">
+        <i data-lucide="lock" class="input-icon"></i>
+        <input id="reg-password" type="password" placeholder="Password (min 6 chars)" required />
+      </div>
+      <button type="submit" class="btn btn-primary btn-block" id="reg-btn">
+        <i data-lucide="user-plus"></i> Create Account
+      </button>
+      <p id="reg-error" class="auth-error"></p>
+    </form>
+  </div>
+</div>
+
+<!-- ════════════════ MAIN APP ════════════════ -->
+<div id="app" class="app hidden">
+
+  <!-- Sidebar -->
+  <aside class="sidebar glass">
+    <div class="sidebar-logo">
+      <div class="logo-icon sm"><i data-lucide="hard-drive"></i></div>
+      <span class="brand-name">FileVault</span>
+    </div>
+
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" id="nav-files" onclick="switchView('files', event)">
+        <i data-lucide="folder-open"></i> <span>My Files</span>
+      </a>
+      <a href="#" class="nav-item" id="nav-shares" onclick="switchView('shares', event)">
+        <i data-lucide="share-2"></i> <span>Shared Links</span>
+      </a>
+      <a href="#" class="nav-item admin-only hidden" id="nav-admin" onclick="switchView('admin', event)">
+        <i data-lucide="shield"></i> <span>Admin Panel</span>
+      </a>
+    </nav>
+
+    <!-- User info / quota -->
+    <div class="sidebar-user">
+      <div class="user-avatar" id="user-avatar-letter">A</div>
+      <div class="user-info">
+        <p class="user-name" id="sidebar-username">—</p>
+        <p class="user-role" id="sidebar-role">user</p>
+      </div>
+      <button class="btn-icon" onclick="handleLogout()" title="Sign Out">
+        <i data-lucide="log-out"></i>
+      </button>
+    </div>
+
+    <div class="storage-widget">
+      <div class="storage-label">
+        <span>Storage</span>
+        <span id="storage-text">—</span>
+      </div>
+      <div class="storage-bar">
+        <div class="storage-fill" id="storage-fill" style="width:0%"></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <main class="main-content">
+
+    <!-- ── FILE EXPLORER VIEW ── -->
+    <section id="view-files" class="view active">
+      <div class="topbar">
+        <div class="topbar-left">
+          <h2 class="view-title">My Files</h2>
+          <div class="breadcrumb" id="breadcrumb"></div>
+        </div>
+        <div class="topbar-actions">
+          <button class="btn btn-ghost" id="view-toggle-btn" onclick="toggleViewMode()" title="Toggle view">
+            <i data-lucide="layout-grid" id="view-toggle-icon"></i>
+          </button>
+          <button class="btn btn-ghost" onclick="openNewFolderDialog()" id="new-folder-btn">
+            <i data-lucide="folder-plus"></i> New Folder
+          </button>
+          <button class="btn btn-primary" onclick="triggerUpload()" id="upload-btn">
+            <i data-lucide="upload-cloud"></i> Upload
+          </button>
+          <input type="file" id="file-input" multiple hidden onchange="handleFileInputChange(event)" />
+        </div>
+      </div>
+
+      <!-- Drop zone hint -->
+      <div class="drop-zone" id="drop-zone">
+        <div class="drop-zone-inner">
+          <i data-lucide="upload-cloud" class="drop-icon"></i>
+          <p>Drop files here to upload</p>
+        </div>
+      </div>
+
+      <!-- File grid -->
+      <div class="file-grid" id="file-grid">
+        <!-- populated by JS -->
+      </div>
+
+      <div class="empty-state hidden" id="empty-state">
+        <i data-lucide="folder-open" class="empty-icon"></i>
+        <p>This folder is empty</p>
+        <p class="empty-sub">Upload files or create a folder to get started</p>
+      </div>
+    </section>
+
+    <!-- ── SHARES VIEW ── -->
+    <section id="view-shares" class="view hidden">
+      <div class="topbar">
+        <h2 class="view-title">Shared Links</h2>
+      </div>
+      <div class="shares-list" id="shares-list">
+        <!-- populated by JS -->
+      </div>
+      <div class="empty-state hidden" id="shares-empty">
+        <i data-lucide="share-2" class="empty-icon"></i>
+        <p>No shared links yet</p>
+        <p class="empty-sub">Right-click a file and select "Share" to create a link</p>
+      </div>
+    </section>
+
+    <!-- ── ADMIN VIEW ── -->
+    <section id="view-admin" class="view hidden">
+      <div class="topbar">
+        <h2 class="view-title">Admin Panel</h2>
+        <button class="btn btn-ghost" onclick="refreshAdmin()">
+          <i data-lucide="refresh-cw"></i> Refresh
+        </button>
+      </div>
+
+      <!-- Stats cards -->
+      <div class="stats-grid">
+        <div class="stat-card glass">
+          <div class="stat-icon"><i data-lucide="users"></i></div>
+          <div class="stat-info">
+            <p class="stat-value" id="stat-users">—</p>
+            <p class="stat-label">Users</p>
+          </div>
+        </div>
+        <div class="stat-card glass">
+          <div class="stat-icon"><i data-lucide="share-2"></i></div>
+          <div class="stat-info">
+            <p class="stat-value" id="stat-shares">—</p>
+            <p class="stat-label">Active Shares</p>
+          </div>
+        </div>
+        <div class="stat-card glass">
+          <div class="stat-icon"><i data-lucide="cpu"></i></div>
+          <div class="stat-info">
+            <p class="stat-value" id="stat-mem">—</p>
+            <p class="stat-label">Memory Usage</p>
+          </div>
+        </div>
+        <div class="stat-card glass">
+          <div class="stat-icon"><i data-lucide="hard-drive"></i></div>
+          <div class="stat-info">
+            <p class="stat-value" id="stat-storage">—</p>
+            <p class="stat-label">Storage Used</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Users table -->
+      <div class="admin-section glass">
+        <h3 class="admin-section-title"><i data-lucide="users"></i> User Management</h3>
+        <div class="table-wrapper">
+          <table class="admin-table" id="users-table">
+            <thead>
+              <tr>
+                <th>Username</th><th>Role</th><th>Status</th><th>Storage Used</th><th>Quota</th><th>Joined</th><th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="users-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Activity log -->
+      <div class="admin-section glass">
+        <h3 class="admin-section-title"><i data-lucide="activity"></i> Activity Log</h3>
+        <div class="log-console" id="log-console"></div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ════════════════ MODALS ════════════════ -->
+
+<!-- New Folder modal -->
+<div id="modal-new-folder" class="modal-overlay hidden" onclick="closeModal('modal-new-folder')">
+  <div class="modal glass" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3><i data-lucide="folder-plus"></i> New Folder</h3>
+      <button class="btn-icon" onclick="closeModal('modal-new-folder')"><i data-lucide="x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="input-group">
+        <i data-lucide="folder" class="input-icon"></i>
+        <input id="new-folder-name" type="text" placeholder="Folder name" />
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-new-folder')">Cancel</button>
+      <button class="btn btn-primary" onclick="createNewFolder()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Rename modal -->
+<div id="modal-rename" class="modal-overlay hidden" onclick="closeModal('modal-rename')">
+  <div class="modal glass" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3><i data-lucide="pencil"></i> Rename</h3>
+      <button class="btn-icon" onclick="closeModal('modal-rename')"><i data-lucide="x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="input-group">
+        <i data-lucide="type" class="input-icon"></i>
+        <input id="rename-input" type="text" placeholder="New name" />
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-rename')">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmRename()">Rename</button>
+    </div>
+  </div>
+</div>
+
+<!-- Share modal -->
+<div id="modal-share" class="modal-overlay hidden" onclick="closeModal('modal-share')">
+  <div class="modal glass" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3><i data-lucide="share-2"></i> Create Share Link</h3>
+      <button class="btn-icon" onclick="closeModal('modal-share')"><i data-lucide="x"></i></button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-file-label" id="share-file-label">File: —</p>
+      <div class="share-options">
+        <label class="form-label">Expires in</label>
+        <select id="share-expires" class="form-select">
+          <option value="">Never</option>
+          <option value="3600">1 Hour</option>
+          <option value="86400">1 Day</option>
+          <option value="604800">7 Days</option>
+          <option value="2592000">30 Days</option>
+        </select>
+      </div>
+      <div class="share-options">
+        <label class="form-label">Max downloads</label>
+        <input id="share-max-dl" type="number" placeholder="Unlimited" min="1" class="form-input" />
+      </div>
+      <div class="share-options">
+        <label class="form-label">Password protect</label>
+        <div class="input-group">
+          <i data-lucide="lock" class="input-icon"></i>
+          <input id="share-password" type="password" placeholder="Leave blank for no password" />
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-share')">Cancel</button>
+      <button class="btn btn-primary" onclick="createShareLink()">Generate Link</button>
+    </div>
+  </div>
+</div>
+
+<!-- Share result modal -->
+<div id="modal-share-result" class="modal-overlay hidden" onclick="closeModal('modal-share-result')">
+  <div class="modal glass" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3><i data-lucide="link"></i> Share Link Created</h3>
+      <button class="btn-icon" onclick="closeModal('modal-share-result')"><i data-lucide="x"></i></button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-sub">Copy the link below and share it:</p>
+      <div class="share-link-box">
+        <input id="share-link-value" type="text" readonly onclick="this.select()" />
+        <button class="btn btn-ghost copy-btn" onclick="copyShareLink()"><i data-lucide="copy"></i></button>
+      </div>
+      <p class="share-copied hidden" id="copy-confirm">✓ Copied to clipboard!</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="closeModal('modal-share-result')">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- Public share download page -->
+<div id="public-share-page" class="auth-overlay hidden">
+  <div class="auth-bg-orbs">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+  </div>
+  <div class="auth-card glass share-download-card">
+    <div class="auth-logo">
+      <div class="logo-icon"><i data-lucide="download-cloud"></i></div>
+      <h2 id="share-dl-filename">File</h2>
+      <p class="auth-tagline" id="share-dl-meta">Shared via FileVault</p>
+    </div>
+    <div id="share-dl-password-area" class="hidden">
+      <div class="input-group">
+        <i data-lucide="lock" class="input-icon"></i>
+        <input id="share-dl-password" type="password" placeholder="Enter password to download" />
+      </div>
+    </div>
+    <p id="share-dl-error" class="auth-error"></p>
+    <button class="btn btn-primary btn-block" id="share-dl-btn" onclick="downloadSharedFile()">
+      <i data-lucide="download"></i> Download File
+    </button>
+    <a href="/" class="btn btn-ghost btn-block" style="margin-top:.5rem;text-align:center;display:block;">
+      <i data-lucide="log-in"></i> Sign in to FileVault
+    </a>
+  </div>
+</div>
+
+<!-- Upload progress panel -->
+<div id="upload-panel" class="upload-panel glass hidden">
+  <div class="upload-panel-header">
+    <span><i data-lucide="upload-cloud"></i> Uploading files</span>
+    <button class="btn-icon" onclick="document.getElementById('upload-panel').classList.add('hidden')">
+      <i data-lucide="x"></i>
+    </button>
+  </div>
+  <div id="upload-panel-items" class="upload-panel-items"></div>
+</div>
+
+<!-- Context menu -->
+<div id="ctx-menu" class="context-menu glass hidden">
+  <button class="ctx-item" id="ctx-download" onclick="ctxDownload()"><i data-lucide="download"></i> Download</button>
+  <button class="ctx-item" id="ctx-share" onclick="ctxShare()"><i data-lucide="share-2"></i> Share</button>
+  <button class="ctx-item" onclick="ctxRename()"><i data-lucide="pencil"></i> Rename</button>
+  <div class="ctx-divider"></div>
+  <button class="ctx-item danger" onclick="ctxDelete()"><i data-lucide="trash-2"></i> Delete</button>
+</div>
+
+<!-- Toast notification -->
+<div id="toast" class="toast hidden"></div>
+
+<!-- Admin quota editor inline template -->
+<script>
+  // Admin quota modal inline
+  window._quotaTarget = null;
+</script>
+
+<div id="modal-quota" class="modal-overlay hidden" onclick="closeModal('modal-quota')">
+  <div class="modal glass" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3><i data-lucide="database"></i> Set Quota</h3>
+      <button class="btn-icon" onclick="closeModal('modal-quota')"><i data-lucide="x"></i></button>
+    </div>
+    <div class="modal-body">
+      <label class="form-label" id="quota-user-label">Username</label>
+      <select id="quota-select" class="form-select">
+        <option value="1073741824">1 GB</option>
+        <option value="5368709120">5 GB</option>
+        <option value="10737418240">10 GB</option>
+        <option value="21474836480">20 GB</option>
+        <option value="53687091200">50 GB</option>
+        <option value="107374182400">100 GB</option>
+      </select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-quota')">Cancel</button>
+      <button class="btn btn-primary" onclick="applyQuota()">Apply</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

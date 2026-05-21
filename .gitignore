@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# User data and storage (sensitive / machine-specific)
+data/users.json
+data/shares.json
+data/logs.json
+storage/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Temp files
+*.tmp
+*.log
