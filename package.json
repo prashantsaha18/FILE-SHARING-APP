@@ -1,7 +1,7 @@
 {
-  "name": "file-sharing-server",
+  "name": "nexdrop",
   "version": "1.0.0",
-  "description": "Cross-platform GUI-based secure file server with multi-user support",
+  "description": "NexDrop – A cross-platform, secure GUI-based file server with multi-user support, file sharing, and an admin dashboard.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

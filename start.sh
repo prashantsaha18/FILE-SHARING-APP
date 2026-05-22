@@ -1,7 +1,7 @@
 #!/bin/bash
 echo ""
 echo "============================================"
-echo "   FileVault - Secure File Server"
+echo "   NexDrop - Secure File Server"
 echo "============================================"
 echo ""
 
@@ -18,7 +18,7 @@ if [ ! -d "node_modules" ]; then
   echo "[*] Done."
 fi
 
-echo "[*] Starting FileVault on http://localhost:3000"
+echo "[*] Starting NexDrop on http://localhost:3000"
 echo "[*] Default: admin / admin123"
 echo "[*] Press Ctrl+C to stop."
 echo ""

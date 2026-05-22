@@ -1,9 +1,9 @@
 @echo off
-title FileVault - File Server
+title NexDrop - File Server
 color 0B
 echo.
 echo ============================================
-echo   FileVault - Secure File Server
+echo   NexDrop - Secure File Server
 echo ============================================
 echo.
 
@@ -29,7 +29,7 @@ if not exist "node_modules\" (
     echo.
 )
 
-echo [*] Starting FileVault server...
+echo [*] Starting NexDrop server...
 echo [*] Open your browser at: http://localhost:3000
 echo [*] Default login: admin / admin123
 echo.

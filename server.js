@@ -426,7 +426,7 @@ async function start() {
 
   app.listen(PORT, () => {
     console.log(`\n┌─────────────────────────────────────────┐`);
-    console.log(`│  🚀 File Server running on port ${PORT}     │`);
+    console.log(`│  🚀 NexDrop running on port ${PORT}        │`);
     console.log(`│  📂 Open: http://localhost:${PORT}          │`);
     console.log(`│  👤 Default admin: admin / admin123    │`);
     console.log(`└─────────────────────────────────────────┘\n`);

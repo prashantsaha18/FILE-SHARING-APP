@@ -1,12 +1,12 @@
 /* ════════════════════════════════════════════════════════
-   app.js – FileVault SPA Controller
+   app.js – NexDrop SPA Controller
    ════════════════════════════════════════════════════════ */
 
 'use strict';
 
 // ─── State ──────────────────────────────────────────────
 const state = {
-  token: localStorage.getItem('fv_token') || null,
+  token: localStorage.getItem('nd_token') || null,
   user: null,
   currentPath: '',
   files: [],
@@ -103,7 +103,7 @@ async function handleLogin(e) {
     if (!res.ok) throw new Error(data.error || 'Login failed');
     state.token = data.token;
     state.user = data.user;
-    localStorage.setItem('fv_token', data.token);
+    localStorage.setItem('nd_token', data.token);
     initApp();
   } catch(err) {
     el('login-error').textContent = err.message;
@@ -131,7 +131,7 @@ async function handleRegister(e) {
     if (!res.ok) throw new Error(data.error || 'Registration failed');
     state.token = data.token;
     state.user = data.user;
-    localStorage.setItem('fv_token', data.token);
+    localStorage.setItem('nd_token', data.token);
     initApp();
   } catch(err) {
     el('reg-error').textContent = err.message;
@@ -142,7 +142,7 @@ async function handleRegister(e) {
 
 function handleLogout() {
   state.token = null; state.user = null;
-  localStorage.removeItem('fv_token');
+  localStorage.removeItem('nd_token');
   el('app').classList.add('hidden');
   el('auth-overlay').classList.remove('hidden');
 }
