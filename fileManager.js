@@ -186,6 +186,67 @@ async function isFile(username, relPath) {
   }
 }
 
+// Move a file or folder to a new directory
+async function moveItem(username, relSrc, relDestDir) {
+  const srcPath = resolveSafe(username, relSrc);
+  const destDirPath = resolveSafe(username, relDestDir === undefined ? '' : relDestDir);
+  const fileName = path.basename(srcPath);
+  const destPath = path.join(destDirPath, fileName);
+  if (destPath === srcPath) throw new Error('Source and destination are the same');
+  await fs.mkdir(destDirPath, { recursive: true });
+  await fs.rename(srcPath, destPath);
+}
+
+// Recursively search files/folders by name (max 100 results)
+async function searchFiles(username, query, relPath = '', results = []) {
+  if (results.length >= 100) return results;
+  const dirPath = resolveSafe(username, relPath);
+  let entries;
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch (_) { return results; }
+  for (const entry of entries) {
+    if (results.length >= 100) break;
+    const entryRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+    if (entry.name.toLowerCase().includes(query.toLowerCase())) {
+      let size = 0, mtime = null;
+      try {
+        const fullP = path.join(dirPath, entry.name);
+        const stat = await fs.stat(fullP);
+        mtime = stat.mtime.toISOString();
+        size = stat.isFile() ? stat.size : await getDirSize(fullP);
+      } catch (_) {}
+      results.push({
+        name: entry.name,
+        isDirectory: entry.isDirectory(),
+        size,
+        modified: mtime,
+        ext: entry.isFile() ? path.extname(entry.name).toLowerCase().slice(1) : null,
+        path: entryRelPath,
+      });
+    }
+    if (entry.isDirectory()) {
+      await searchFiles(username, query, entryRelPath, results);
+    }
+  }
+  return results;
+}
+
+// Get detailed metadata for a file or folder
+async function getFileInfo(username, relPath) {
+  const filePath = resolveSafe(username, relPath);
+  const stat = await fs.stat(filePath);
+  return {
+    name: path.basename(filePath),
+    path: relPath,
+    size: stat.isFile() ? stat.size : await getDirSize(filePath),
+    isDirectory: stat.isDirectory(),
+    modified: stat.mtime.toISOString(),
+    created: stat.birthtime.toISOString(),
+    ext: stat.isFile() ? path.extname(filePath).toLowerCase().slice(1) : null,
+  };
+}
+
 module.exports = {
   ensureUserHome,
   listDirectory,
@@ -199,4 +260,7 @@ module.exports = {
   getAbsolutePath,
   isFile,
   getDirSize,
+  moveItem,
+  searchFiles,
+  getFileInfo,
 };

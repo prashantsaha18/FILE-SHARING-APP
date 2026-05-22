@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>NexDrop – Secure File Server</title>
-  <meta name="description" content="NexDrop is a cross-platform, secure GUI-based file server with multi-user support, file sharing, and an admin dashboard." />
+  <meta name="description" content="NexDrop is a cross-platform, secure GUI-based file server with multi-user support, real-time search, file preview, and an admin dashboard." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -12,6 +12,9 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+
+<!-- Sidebar Overlay (mobile) -->
+<div id="sidebar-overlay" class="sidebar-overlay" onclick="toggleSidebar()"></div>
 
 <!-- ════════════════ AUTH OVERLAY ════════════════ -->
 <div id="auth-overlay" class="auth-overlay">
@@ -75,10 +78,13 @@
 <div id="app" class="app hidden">
 
   <!-- Sidebar -->
-  <aside class="sidebar glass">
+  <aside class="sidebar glass" id="sidebar">
     <div class="sidebar-logo">
       <div class="logo-icon sm"><i data-lucide="hard-drive"></i></div>
       <span class="brand-name">NexDrop</span>
+      <button class="btn-icon sidebar-close-btn" onclick="toggleSidebar()" title="Close menu">
+        <i data-lucide="x"></i>
+      </button>
     </div>
 
     <nav class="sidebar-nav">
@@ -123,21 +129,51 @@
     <section id="view-files" class="view active">
       <div class="topbar">
         <div class="topbar-left">
-          <h2 class="view-title">My Files</h2>
-          <div class="breadcrumb" id="breadcrumb"></div>
+          <button class="hamburger btn-icon" onclick="toggleSidebar()" id="hamburger-btn" title="Menu">
+            <i data-lucide="menu"></i>
+          </button>
+          <div>
+            <h2 class="view-title">My Files</h2>
+            <div class="breadcrumb" id="breadcrumb"></div>
+          </div>
         </div>
+
+        <!-- Search Bar -->
+        <div class="search-wrap">
+          <i data-lucide="search" class="search-icon"></i>
+          <input type="text" id="search-input" placeholder="Search files…" oninput="handleSearch(event)" autocomplete="off" />
+          <button class="search-clear hidden" id="search-clear" onclick="clearSearch()" title="Clear search">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+
         <div class="topbar-actions">
           <button class="btn btn-ghost" id="view-toggle-btn" onclick="toggleViewMode()" title="Toggle view">
             <i data-lucide="layout-grid" id="view-toggle-icon"></i>
           </button>
           <button class="btn btn-ghost" onclick="openNewFolderDialog()" id="new-folder-btn">
-            <i data-lucide="folder-plus"></i> New Folder
+            <i data-lucide="folder-plus"></i> <span>New Folder</span>
           </button>
           <button class="btn btn-primary" onclick="triggerUpload()" id="upload-btn">
-            <i data-lucide="upload-cloud"></i> Upload
+            <i data-lucide="upload-cloud"></i> <span>Upload</span>
           </button>
           <input type="file" id="file-input" multiple hidden onchange="handleFileInputChange(event)" />
         </div>
+      </div>
+
+      <!-- Sort Bar -->
+      <div class="sort-bar" id="sort-bar">
+        <span class="sort-label">Sort:</span>
+        <button class="sort-btn active" data-sort="name" onclick="sortFiles('name')">
+          <i data-lucide="chevron-up" class="sort-icon"></i> Name
+        </button>
+        <button class="sort-btn" data-sort="size" onclick="sortFiles('size')">
+          Size
+        </button>
+        <button class="sort-btn" data-sort="date" onclick="sortFiles('date')">
+          Modified
+        </button>
+        <span class="sort-label" id="file-count-label" style="margin-left:auto"></span>
       </div>
 
       <!-- Drop zone hint -->
@@ -163,7 +199,12 @@
     <!-- ── SHARES VIEW ── -->
     <section id="view-shares" class="view hidden">
       <div class="topbar">
-        <h2 class="view-title">Shared Links</h2>
+        <div class="topbar-left">
+          <button class="hamburger btn-icon" onclick="toggleSidebar()">
+            <i data-lucide="menu"></i>
+          </button>
+          <h2 class="view-title">Shared Links</h2>
+        </div>
       </div>
       <div class="shares-list" id="shares-list">
         <!-- populated by JS -->
@@ -178,7 +219,12 @@
     <!-- ── ADMIN VIEW ── -->
     <section id="view-admin" class="view hidden">
       <div class="topbar">
-        <h2 class="view-title">Admin Panel</h2>
+        <div class="topbar-left">
+          <button class="hamburger btn-icon" onclick="toggleSidebar()">
+            <i data-lucide="menu"></i>
+          </button>
+          <h2 class="view-title">Admin Panel</h2>
+        </div>
         <button class="btn btn-ghost" onclick="refreshAdmin()">
           <i data-lucide="refresh-cw"></i> Refresh
         </button>
@@ -190,7 +236,7 @@
           <div class="stat-icon"><i data-lucide="users"></i></div>
           <div class="stat-info">
             <p class="stat-value" id="stat-users">—</p>
-            <p class="stat-label">Users</p>
+            <p class="stat-label">Total Users</p>
           </div>
         </div>
         <div class="stat-card glass">
@@ -342,6 +388,70 @@
   </div>
 </div>
 
+<!-- Move File modal -->
+<div id="modal-move" class="modal-overlay hidden" onclick="closeModal('modal-move')">
+  <div class="modal glass" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3><i data-lucide="move"></i> Move File</h3>
+      <button class="btn-icon" onclick="closeModal('modal-move')"><i data-lucide="x"></i></button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-file-label" id="move-file-label">Moving: —</p>
+      <label class="form-label" style="margin-top:.5rem">Select destination folder:</label>
+      <div class="folder-picker" id="folder-picker"></div>
+      <p style="font-size:.75rem;color:var(--text-muted);margin-top:.5rem">Click a folder to select it as the destination</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-move')">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmMove()"><i data-lucide="move"></i> Move Here</button>
+    </div>
+  </div>
+</div>
+
+<!-- File Preview modal -->
+<div id="modal-preview" class="modal-overlay hidden" onclick="closePreviewOnOverlay(event)">
+  <div class="preview-inner" onclick="event.stopPropagation()">
+    <div class="preview-header">
+      <h3 id="preview-filename">File Preview</h3>
+      <div style="display:flex;gap:.35rem">
+        <button class="btn btn-ghost" id="preview-download-btn" style="padding:.35rem .75rem;font-size:.8rem">
+          <i data-lucide="download"></i> Download
+        </button>
+        <button class="btn-icon" onclick="closeModal('modal-preview')"><i data-lucide="x"></i></button>
+      </div>
+    </div>
+    <div class="preview-body" id="preview-body">
+      <div class="preview-loading"><i data-lucide="loader-2" class="spin-icon"></i> Loading preview…</div>
+    </div>
+  </div>
+</div>
+
+<!-- Quota modal -->
+<script>window._quotaTarget = null;</script>
+<div id="modal-quota" class="modal-overlay hidden" onclick="closeModal('modal-quota')">
+  <div class="modal glass" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3><i data-lucide="database"></i> Set Quota</h3>
+      <button class="btn-icon" onclick="closeModal('modal-quota')"><i data-lucide="x"></i></button>
+    </div>
+    <div class="modal-body">
+      <label class="form-label" id="quota-user-label">Username</label>
+      <select id="quota-select" class="form-select">
+        <option value="1073741824">1 GB</option>
+        <option value="5368709120">5 GB</option>
+        <option value="10737418240">10 GB</option>
+        <option value="21474836480">20 GB</option>
+        <option value="53687091200">50 GB</option>
+        <option value="107374182400">100 GB</option>
+      </select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-quota')">Cancel</button>
+      <button class="btn btn-primary" onclick="applyQuota()">Apply</button>
+    </div>
+  </div>
+</div>
+
 <!-- Public share download page -->
 <div id="public-share-page" class="auth-overlay hidden">
   <div class="auth-bg-orbs">
@@ -383,9 +493,12 @@
 
 <!-- Context menu -->
 <div id="ctx-menu" class="context-menu glass hidden">
+  <button class="ctx-item" id="ctx-preview" onclick="ctxPreview()"><i data-lucide="eye"></i> Preview</button>
   <button class="ctx-item" id="ctx-download" onclick="ctxDownload()"><i data-lucide="download"></i> Download</button>
   <button class="ctx-item" id="ctx-share" onclick="ctxShare()"><i data-lucide="share-2"></i> Share</button>
+  <div class="ctx-divider"></div>
   <button class="ctx-item" onclick="ctxRename()"><i data-lucide="pencil"></i> Rename</button>
+  <button class="ctx-item" id="ctx-move" onclick="ctxMove()"><i data-lucide="move"></i> Move</button>
   <div class="ctx-divider"></div>
   <button class="ctx-item danger" onclick="ctxDelete()"><i data-lucide="trash-2"></i> Delete</button>
 </div>
@@ -393,35 +506,10 @@
 <!-- Toast notification -->
 <div id="toast" class="toast hidden"></div>
 
-<!-- Admin quota editor inline template -->
-<script>
-  // Admin quota modal inline
-  window._quotaTarget = null;
-</script>
-
-<div id="modal-quota" class="modal-overlay hidden" onclick="closeModal('modal-quota')">
-  <div class="modal glass" onclick="event.stopPropagation()">
-    <div class="modal-header">
-      <h3><i data-lucide="database"></i> Set Quota</h3>
-      <button class="btn-icon" onclick="closeModal('modal-quota')"><i data-lucide="x"></i></button>
-    </div>
-    <div class="modal-body">
-      <label class="form-label" id="quota-user-label">Username</label>
-      <select id="quota-select" class="form-select">
-        <option value="1073741824">1 GB</option>
-        <option value="5368709120">5 GB</option>
-        <option value="10737418240">10 GB</option>
-        <option value="21474836480">20 GB</option>
-        <option value="53687091200">50 GB</option>
-        <option value="107374182400">100 GB</option>
-      </select>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal('modal-quota')">Cancel</button>
-      <button class="btn btn-primary" onclick="applyQuota()">Apply</button>
-    </div>
-  </div>
-</div>
+<!-- Floating Action Button (mobile upload) -->
+<button class="fab hidden" id="fab-upload" onclick="triggerUpload()" title="Upload files">
+  <i data-lucide="upload"></i>
+</button>
 
 <script src="app.js"></script>
 </body>

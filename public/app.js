@@ -6,16 +6,23 @@
 
 // ─── State ──────────────────────────────────────────────
 const state = {
-  token: localStorage.getItem('nd_token') || null,
-  user: null,
-  currentPath: '',
-  files: [],
-  shares: [],
-  viewMode: 'grid', // 'grid' | 'list'
-  ctxTarget: null,  // file item currently in context menu
-  renameTarget: null,
-  shareTarget: null,
-  shareToken: null, // for public share page
+  token:         localStorage.getItem('nd_token') || null,
+  user:          null,
+  currentPath:   '',
+  files:         [],        // current directory listing
+  filteredFiles: null,      // search results (null = not searching)
+  shares:        [],
+  viewMode:      'grid',    // 'grid' | 'list'
+  sortBy:        'name',
+  sortAsc:       true,
+  lastSortBy:    'name',
+  isSearching:   false,
+  ctxTarget:     null,      // item currently in context menu
+  renameTarget:  null,
+  shareTarget:   null,
+  moveTarget:    null,
+  shareToken:    null,      // for public share page
+  selectedDest:  '',        // destination path for move
 };
 
 const API = '/api';
@@ -24,68 +31,99 @@ const API = '/api';
 function el(id) { return document.getElementById(id); }
 
 function formatBytes(bytes) {
-  if (bytes === 0) return '0 B';
+  if (!bytes || bytes === 0) return '0 B';
   const k = 1024, sizes = ['B','KB','MB','GB','TB'];
-  const i = Math.floor(Math.log(bytes)/Math.log(k));
-  return (bytes/Math.pow(k,i)).toFixed(1)+' '+sizes[i];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
 }
 
 function timeAgo(iso) {
-  const d = new Date(iso), now = Date.now(), s = Math.floor((now - d)/1000);
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s/60)}m ago`;
-  if (s < 86400) return `${Math.floor(s/3600)}h ago`;
-  return `${Math.floor(s/86400)}d ago`;
+  const d = new Date(iso), now = Date.now(), s = Math.floor((now - d) / 1000);
+  if (s < 60)    return `${s}s ago`;
+  if (s < 3600)  return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
 }
 
-function toast(msg, duration=2800) {
+// ─── Toast (supports types: success / error / warning / info) ──
+function toast(msg, type = 'success', duration = 3000) {
   const t = el('toast');
   t.textContent = msg;
+  t.className = `toast ${type}`;
   t.classList.remove('hidden');
   clearTimeout(t._to);
   t._to = setTimeout(() => t.classList.add('hidden'), duration);
 }
 
-async function apiFetch(path, opts={}) {
-  const headers = { 'Content-Type':'application/json', ...(opts.headers||{}) };
+async function apiFetch(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
   if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
   if (opts.body instanceof FormData) delete headers['Content-Type'];
-  const res = await fetch(API + path, { ...opts, headers });
-  return res;
+  return fetch(API + path, { ...opts, headers });
 }
 
 // ─── File type icons ──────────────────────────────────────
 function fileIcon(name, isDir) {
   if (isDir) return '📁';
-  const ext = name.split('.').pop().toLowerCase();
+  const ext = (name.split('.').pop() || '').toLowerCase();
   const map = {
-    // Images
-    jpg:'🖼️',jpeg:'🖼️',png:'🖼️',gif:'🖼️',webp:'🖼️',svg:'🖼️',ico:'🖼️',bmp:'🖼️',
-    // Video
-    mp4:'🎬',mkv:'🎬',avi:'🎬',mov:'🎬',webm:'🎬',
-    // Audio
-    mp3:'🎵',wav:'🎵',flac:'🎵',ogg:'🎵',m4a:'🎵',
-    // Documents
-    pdf:'📄',doc:'📝',docx:'📝',xls:'📊',xlsx:'📊',ppt:'📊',pptx:'📊',
-    txt:'📃',md:'📃',csv:'📊',
-    // Code
-    js:'⚙️',ts:'⚙️',py:'🐍',java:'☕',c:'⚙️',cpp:'⚙️',
-    html:'🌐',css:'🎨',json:'🔧',xml:'🔧',yml:'🔧',yaml:'🔧',
-    sh:'💻',bat:'💻',ps1:'💻',
-    // Archives
-    zip:'📦',rar:'📦',tar:'📦',gz:'📦','7z':'📦',
-    // Misc
-    exe:'⚡',msi:'⚡',dmg:'⚡',iso:'💿',
+    jpg:'🖼️', jpeg:'🖼️', png:'🖼️', gif:'🖼️', webp:'🖼️', svg:'🖼️', ico:'🖼️', bmp:'🖼️',
+    mp4:'🎬', mkv:'🎬', avi:'🎬', mov:'🎬', webm:'🎬',
+    mp3:'🎵', wav:'🎵', flac:'🎵', ogg:'🎵', m4a:'🎵',
+    pdf:'📄', doc:'📝', docx:'📝', xls:'📊', xlsx:'📊', ppt:'📊', pptx:'📊',
+    txt:'📃', md:'📃', csv:'📊',
+    js:'⚙️', ts:'⚙️', py:'🐍', java:'☕', c:'⚙️', cpp:'⚙️',
+    html:'🌐', css:'🎨', json:'🔧', xml:'🔧', yml:'🔧', yaml:'🔧',
+    sh:'💻', bat:'💻', ps1:'💻', log:'📋',
+    zip:'📦', rar:'📦', tar:'📦', gz:'📦', '7z':'📦',
+    exe:'⚡', msi:'⚡', dmg:'⚡', iso:'💿',
   };
   return map[ext] || '📄';
 }
 
+// ─── Previewable extensions ──────────────────────────────
+const PREVIEWABLE = new Set([
+  'jpg','jpeg','png','gif','webp','svg','bmp',
+  'mp4','webm','mov',
+  'mp3','wav','flac','m4a','ogg',
+  'txt','md','js','ts','py','html','css','json','xml',
+  'csv','sh','bat','log','yaml','yml',
+]);
+
+function isPreviewable(name) {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  return PREVIEWABLE.has(ext);
+}
+
+// ─── Get currently displayed file list ─────────────────
+function getCurrentFiles() {
+  return state.isSearching && state.filteredFiles ? state.filteredFiles : state.files;
+}
+
+// ─── Skeleton Loaders ───────────────────────────────────
+function showSkeletons(count = 10) {
+  const grid  = el('file-grid');
+  const empty = el('empty-state');
+  empty.classList.add('hidden');
+  const isList = state.viewMode === 'list';
+  grid.className = 'file-grid' + (isList ? ' list-view' : '');
+  grid.innerHTML = Array.from({ length: count }, () => `
+    <div class="skeleton-card${isList ? ' list-item' : ''}">
+      <div class="skeleton-block skeleton-icon"></div>
+      ${isList
+        ? '<div style="flex:1;display:flex;flex-direction:column;gap:.4rem"><div class="skeleton-block skeleton-name"></div><div class="skeleton-block skeleton-meta"></div></div>'
+        : '<div class="skeleton-block skeleton-name"></div><div class="skeleton-block skeleton-meta"></div>'
+      }
+    </div>
+  `).join('');
+}
+
 // ─── Auth ────────────────────────────────────────────────
 function switchAuthTab(tab) {
-  el('tab-login').classList.toggle('active', tab==='login');
-  el('tab-register').classList.toggle('active', tab==='register');
-  el('login-form').classList.toggle('hidden', tab!=='login');
-  el('register-form').classList.toggle('hidden', tab!=='register');
+  el('tab-login').classList.toggle('active', tab === 'login');
+  el('tab-register').classList.toggle('active', tab === 'register');
+  el('login-form').classList.toggle('hidden', tab !== 'login');
+  el('register-form').classList.toggle('hidden', tab !== 'register');
 }
 
 async function handleLogin(e) {
@@ -94,21 +132,23 @@ async function handleLogin(e) {
   btn.disabled = true; btn.textContent = 'Signing in…';
   el('login-error').textContent = '';
   try {
-    const res = await fetch('/api/auth/login', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
+    const res  = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: el('login-username').value, password: el('login-password').value }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Login failed');
     state.token = data.token;
-    state.user = data.user;
+    state.user  = data.user;
     localStorage.setItem('nd_token', data.token);
     initApp();
-  } catch(err) {
+  } catch (err) {
     el('login-error').textContent = err.message;
   } finally {
-    btn.disabled = false; btn.innerHTML = '<i data-lucide="log-in"></i> Sign In'; lucide.createIcons();
+    btn.disabled = false;
+    btn.innerHTML = '<i data-lucide="log-in"></i> Sign In';
+    lucide.createIcons();
   }
 }
 
@@ -118,25 +158,27 @@ async function handleRegister(e) {
   btn.disabled = true; btn.textContent = 'Creating…';
   el('reg-error').textContent = '';
   try {
-    const res = await fetch('/api/auth/register', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
+    const res  = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username: el('reg-username').value,
-        email: el('reg-email').value,
+        email:    el('reg-email').value,
         password: el('reg-password').value,
       }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Registration failed');
     state.token = data.token;
-    state.user = data.user;
+    state.user  = data.user;
     localStorage.setItem('nd_token', data.token);
     initApp();
-  } catch(err) {
+  } catch (err) {
     el('reg-error').textContent = err.message;
   } finally {
-    btn.disabled = false; btn.innerHTML = '<i data-lucide="user-plus"></i> Create Account'; lucide.createIcons();
+    btn.disabled = false;
+    btn.innerHTML = '<i data-lucide="user-plus"></i> Create Account';
+    lucide.createIcons();
   }
 }
 
@@ -145,11 +187,12 @@ function handleLogout() {
   localStorage.removeItem('nd_token');
   el('app').classList.add('hidden');
   el('auth-overlay').classList.remove('hidden');
+  lucide.createIcons();
 }
 
 // ─── App Init ────────────────────────────────────────────
 async function initApp() {
-  // Check if this is a public share page
+  // Public share page
   const shareMatch = location.pathname.match(/^\/share\/([^/]+)$/);
   if (shareMatch) {
     state.shareToken = shareMatch[1];
@@ -178,16 +221,19 @@ async function initApp() {
   el('app').classList.remove('hidden');
   el('public-share-page').classList.add('hidden');
 
-  // Populate sidebar
+  // Sidebar
   el('sidebar-username').textContent = state.user.username;
-  el('sidebar-role').textContent = state.user.role;
+  el('sidebar-role').textContent     = state.user.role;
   el('user-avatar-letter').textContent = state.user.username[0].toUpperCase();
   updateStorageBar();
 
-  // Show admin nav if admin
+  // Admin nav
   if (state.user.role === 'admin') {
     document.querySelectorAll('.admin-only').forEach(e => e.classList.remove('hidden'));
   }
+
+  // FAB visible on mobile
+  el('fab-upload').classList.remove('hidden');
 
   setupDragDrop();
   loadFiles();
@@ -195,106 +241,144 @@ async function initApp() {
 }
 
 function updateStorageBar() {
-  const used = state.user.usedSpace || 0;
+  const used  = state.user.usedSpace || 0;
   const quota = state.user.quota || 1073741824;
-  const pct = Math.min(100, (used/quota)*100).toFixed(1);
-  el('storage-fill').style.width = pct+'%';
+  const pct   = Math.min(100, (used / quota) * 100).toFixed(1);
+  el('storage-fill').style.width = pct + '%';
   el('storage-text').textContent = `${formatBytes(used)} / ${formatBytes(quota)}`;
+}
+
+// ─── Mobile Sidebar Toggle ───────────────────────────────
+function toggleSidebar() {
+  el('sidebar').classList.toggle('open');
+  el('sidebar-overlay').classList.toggle('visible');
 }
 
 // ─── View Switching ──────────────────────────────────────
 function switchView(view, e) {
   if (e) e.preventDefault();
+  // Close sidebar on mobile after navigation
+  el('sidebar').classList.remove('open');
+  el('sidebar-overlay').classList.remove('visible');
+
   document.querySelectorAll('.view').forEach(v => { v.classList.remove('active'); v.classList.add('hidden'); });
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  const v = el('view-'+view);
+  const v   = el('view-' + view);
   v.classList.remove('hidden'); v.classList.add('active');
-  const nav = el('nav-'+view);
+  const nav = el('nav-' + view);
   if (nav) nav.classList.add('active');
 
   if (view === 'shares') loadShares();
-  if (view === 'admin') refreshAdmin();
+  if (view === 'admin')  refreshAdmin();
   lucide.createIcons();
 }
 
 // ─── File Explorer ───────────────────────────────────────
 async function loadFiles(path = state.currentPath) {
-  state.currentPath = path;
+  state.currentPath   = path;
+  state.isSearching   = false;
+  state.filteredFiles = null;
+  if (el('search-input')) { el('search-input').value = ''; el('search-clear').classList.add('hidden'); }
   renderBreadcrumb(path);
+  showSkeletons();
 
   try {
-    const res = await apiFetch(`/files/list?path=${encodeURIComponent(path)}`);
+    const res  = await apiFetch(`/files/list?path=${encodeURIComponent(path)}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     state.files = data.items;
+    applySortToCurrentList();
     renderFileGrid();
-  } catch(err) {
-    toast('Error loading files: '+err.message);
+  } catch (err) {
+    toast('Error loading files: ' + err.message, 'error');
   }
 }
 
 function renderBreadcrumb(path) {
-  const bc = el('breadcrumb');
+  const bc    = el('breadcrumb');
   const parts = path.split('/').filter(Boolean);
-  let html = `<span class="breadcrumb-item ${path===''?'current':''}" onclick="loadFiles('')">Home</span>`;
+  let html = `<span class="breadcrumb-item ${path === '' ? 'current' : ''}" onclick="loadFiles('')">Home</span>`;
   let built = '';
   for (let i = 0; i < parts.length; i++) {
     built += (built ? '/' : '') + parts[i];
     const isCurrent = i === parts.length - 1;
     const p = built;
     html += `<span class="breadcrumb-sep">›</span>
-      <span class="breadcrumb-item ${isCurrent?'current':''}" onclick="loadFiles('${p}')">${parts[i]}</span>`;
+      <span class="breadcrumb-item ${isCurrent ? 'current' : ''}" onclick="loadFiles('${p}')">${parts[i]}</span>`;
   }
   bc.innerHTML = html;
 }
 
-function renderFileGrid() {
-  const grid = el('file-grid');
-  const empty = el('empty-state');
-  grid.className = 'file-grid' + (state.viewMode === 'list' ? ' list-view' : '');
-
-  if (state.files.length === 0) {
-    grid.innerHTML = '';
-    empty.classList.remove('hidden');
-    return;
-  }
-  empty.classList.add('hidden');
+function renderFileCard(f, i, isSearch = false) {
+  const pathHint = isSearch && f.path.includes('/') 
+    ? `<div class="search-path-hint">📁 /${f.path.split('/').slice(0,-1).join('/')}/</div>` 
+    : '';
 
   if (state.viewMode === 'grid') {
-    grid.innerHTML = state.files.map((f, i) => `
+    return `
       <div class="file-card" data-idx="${i}"
         onclick="fileClick(${i})"
         oncontextmenu="showCtxMenu(event, ${i})">
         <span class="file-icon">${fileIcon(f.name, f.isDirectory)}</span>
-        <span class="file-name">${f.name}</span>
+        <span class="file-name">${escapeHtml(f.name)}</span>
         <span class="file-meta">${f.isDirectory ? 'Folder' : formatBytes(f.size)}</span>
-      </div>
-    `).join('');
+        ${pathHint}
+      </div>`;
   } else {
-    grid.innerHTML = state.files.map((f, i) => `
+    return `
       <div class="file-card list-item" data-idx="${i}"
         onclick="fileClick(${i})"
         oncontextmenu="showCtxMenu(event, ${i})">
         <span class="file-icon">${fileIcon(f.name, f.isDirectory)}</span>
         <div class="file-info">
-          <div class="file-name">${f.name}</div>
+          <div class="file-name">${escapeHtml(f.name)}</div>
           <div class="file-meta">
             <span>${f.isDirectory ? 'Folder' : formatBytes(f.size)}</span>
             ${f.modified ? `<span>${timeAgo(f.modified)}</span>` : ''}
+            ${isSearch && f.path.includes('/') ? `<span>📁 /${f.path.split('/').slice(0,-1).join('/')}/</span>` : ''}
           </div>
         </div>
-      </div>
-    `).join('');
+      </div>`;
   }
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderFileGrid() {
+  const grid  = el('file-grid');
+  const empty = el('empty-state');
+  const list  = getCurrentFiles();
+  grid.className = 'file-grid' + (state.viewMode === 'list' ? ' list-view' : '');
+
+  // File count
+  const lbl = el('file-count-label');
+  if (lbl) lbl.textContent = list.length ? `${list.length} item${list.length !== 1 ? 's' : ''}` : '';
+
+  if (!list.length) {
+    grid.innerHTML = '';
+    empty.classList.remove('hidden');
+    if (state.isSearching) {
+      empty.querySelector('p').textContent = 'No files match your search';
+    } else {
+      empty.querySelector('p').textContent = 'This folder is empty';
+    }
+    return;
+  }
+  empty.classList.add('hidden');
+  grid.innerHTML = list.map((f, i) => renderFileCard(f, i, state.isSearching)).join('');
   lucide.createIcons();
 }
 
 function fileClick(idx) {
-  const f = state.files[idx];
+  const f = getCurrentFiles()[idx];
+  if (!f) return;
   if (f.isDirectory) {
     loadFiles(f.path);
+  } else if (isPreviewable(f.name)) {
+    previewFile(f);
   } else {
-    // Download on click
     downloadFile(f.path);
   }
 }
@@ -306,20 +390,238 @@ function toggleViewMode() {
   lucide.createIcons();
 }
 
-function downloadFile(path) {
-  // Use fetch with Authorization header for authenticated download
-  fetchDownload(path);
-}
+function downloadFile(path) { fetchDownload(path); }
 
 async function fetchDownload(path) {
-  const res = await apiFetch(`/files/download?path=${encodeURIComponent(path)}`);
-  if (!res.ok) { toast('Download failed'); return; }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = path.split('/').pop();
-  a.click();
-  URL.revokeObjectURL(url);
+  try {
+    const res = await apiFetch(`/files/download?path=${encodeURIComponent(path)}`);
+    if (!res.ok) { toast('Download failed', 'error'); return; }
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = path.split('/').pop();
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch {
+    toast('Download failed', 'error');
+  }
+}
+
+// ─── Search ──────────────────────────────────────────────
+let _searchTimer;
+function handleSearch(e) {
+  const q = e.target.value.trim();
+  el('search-clear').classList.toggle('hidden', !q);
+  clearTimeout(_searchTimer);
+
+  if (!q) {
+    state.isSearching   = false;
+    state.filteredFiles = null;
+    renderFileGrid();
+    return;
+  }
+
+  state.isSearching = true;
+  showSkeletons(5);
+
+  _searchTimer = setTimeout(async () => {
+    try {
+      const res  = await apiFetch(`/files/search?q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      state.filteredFiles = data;
+      applySortToCurrentList();
+      renderFileGrid();
+    } catch (err) {
+      toast('Search error: ' + err.message, 'error');
+    }
+  }, 350);
+}
+
+function clearSearch() {
+  el('search-input').value = '';
+  el('search-clear').classList.add('hidden');
+  state.isSearching   = false;
+  state.filteredFiles = null;
+  renderFileGrid();
+}
+
+// ─── Sort ────────────────────────────────────────────────
+function applySortToCurrentList() {
+  const list = state.isSearching ? state.filteredFiles : state.files;
+  if (!list) return;
+  list.sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    let av, bv;
+    if      (state.sortBy === 'name') { av = a.name.toLowerCase(); bv = b.name.toLowerCase(); }
+    else if (state.sortBy === 'size') { av = a.size || 0;          bv = b.size || 0; }
+    else if (state.sortBy === 'date') { av = a.modified || '';      bv = b.modified || ''; }
+    if (av < bv) return state.sortAsc ? -1 : 1;
+    if (av > bv) return state.sortAsc ? 1 : -1;
+    return 0;
+  });
+}
+
+function sortFiles(by) {
+  state.sortAsc   = state.lastSortBy === by ? !state.sortAsc : true;
+  state.sortBy    = by;
+  state.lastSortBy = by;
+
+  document.querySelectorAll('.sort-btn').forEach(b => {
+    const isActive = b.dataset.sort === by;
+    b.classList.toggle('active', isActive);
+    const icon = b.querySelector('svg');
+    if (icon && isActive) {
+      icon.setAttribute('data-lucide', state.sortAsc ? 'chevron-up' : 'chevron-down');
+      lucide.createIcons();
+    }
+  });
+
+  applySortToCurrentList();
+  renderFileGrid();
+}
+
+// ─── File Preview ────────────────────────────────────────
+function previewFile(file) {
+  const ext = (file.ext || (file.name.split('.').pop() || '')).toLowerCase();
+  el('preview-filename').textContent = file.name;
+  el('preview-download-btn').onclick = () => fetchDownload(file.path);
+
+  const body = el('preview-body');
+  body.innerHTML = '<div class="preview-loading"><i data-lucide="loader-2" class="spin-icon"></i> Loading preview…</div>';
+  lucide.createIcons();
+
+  openModal('modal-preview');
+
+  const isImage = ['jpg','jpeg','png','gif','webp','svg','bmp'].includes(ext);
+  const isVideo = ['mp4','webm','mov'].includes(ext);
+  const isAudio = ['mp3','wav','flac','m4a','ogg'].includes(ext);
+  const isText  = ['txt','md','js','ts','py','html','css','json','xml','csv','sh','bat','log','yaml','yml'].includes(ext);
+
+  if (isImage) {
+    fetchPreviewBlob(file.path).then(url => {
+      if (!url) return;
+      body.innerHTML = '';
+      const img = document.createElement('img');
+      img.src = url; img.alt = file.name;
+      body.appendChild(img);
+    });
+  } else if (isVideo) {
+    fetchPreviewBlob(file.path).then(url => {
+      if (!url) return;
+      body.innerHTML = '';
+      const vid = document.createElement('video');
+      vid.controls = true; vid.src = url;
+      body.appendChild(vid);
+    });
+  } else if (isAudio) {
+    fetchPreviewBlob(file.path).then(url => {
+      if (!url) return;
+      body.innerHTML = '';
+      const aud = document.createElement('audio');
+      aud.controls = true; aud.src = url;
+      body.appendChild(aud);
+    });
+  } else if (isText) {
+    fetchPreviewText(file.path).then(text => {
+      body.innerHTML = '';
+      const pre = document.createElement('div');
+      pre.className = 'preview-text-content';
+      pre.textContent = text.length > 60000 ? text.slice(0, 60000) + '\n\n… (truncated for preview)' : text;
+      body.appendChild(pre);
+    });
+  } else {
+    body.innerHTML = `
+      <div class="preview-unsupported">
+        <span class="preview-big-icon">${fileIcon(file.name, false)}</span>
+        <p style="font-size:1rem;font-weight:600;margin-bottom:.5rem">${escapeHtml(file.name)}</p>
+        <p>Preview not available for .${ext} files</p>
+        <button class="btn btn-primary" style="margin-top:1rem" onclick="fetchDownload('${file.path}')">
+          <i data-lucide="download"></i> Download Instead
+        </button>
+      </div>`;
+    lucide.createIcons();
+  }
+}
+
+async function fetchPreviewBlob(path) {
+  try {
+    const res = await apiFetch(`/files/download?path=${encodeURIComponent(path)}`);
+    if (!res.ok) return null;
+    return URL.createObjectURL(await res.blob());
+  } catch { return null; }
+}
+
+async function fetchPreviewText(path) {
+  try {
+    const res = await apiFetch(`/files/download?path=${encodeURIComponent(path)}`);
+    if (!res.ok) return 'Failed to load file content.';
+    return await res.text();
+  } catch { return 'Error loading file.'; }
+}
+
+function closePreviewOnOverlay(e) {
+  if (e.target === el('modal-preview')) closeModal('modal-preview');
+}
+
+// ─── Move File ───────────────────────────────────────────
+function openMoveModal(file) {
+  state.moveTarget   = file;
+  state.selectedDest = '';
+  el('move-file-label').textContent = `Moving: ${file.name}`;
+  loadFolderPicker('');
+  openModal('modal-move');
+}
+
+async function loadFolderPicker(path) {
+  const picker = el('folder-picker');
+  picker.innerHTML = '<div class="folder-picker-empty">Loading folders…</div>';
+
+  try {
+    const res  = await apiFetch(`/files/list?path=${encodeURIComponent(path)}`);
+    const data = await res.json();
+    const folders = (data.items || []).filter(f => f.isDirectory && f.path !== state.moveTarget?.path);
+
+    const items = [];
+    // Always offer root option
+    items.push({ name: '🏠 Root (Home)', path: '', isRoot: true });
+    folders.forEach(f => items.push(f));
+
+    if (items.length === 1 && !folders.length) {
+      picker.innerHTML = '<div class="folder-picker-empty">No subfolders available</div>';
+    } else {
+      picker.innerHTML = items.map(f => `
+        <div class="folder-picker-item" data-path="${f.path}" onclick="selectMoveDest('${f.path}', this)">
+          <span class="folder-icon">📁</span>
+          <span>${escapeHtml(f.name)}</span>
+        </div>`).join('');
+    }
+  } catch {
+    picker.innerHTML = '<div class="folder-picker-empty">Error loading folders</div>';
+  }
+}
+
+function selectMoveDest(path, elem) {
+  document.querySelectorAll('.folder-picker-item').forEach(i => i.classList.remove('selected'));
+  elem.classList.add('selected');
+  state.selectedDest = path;
+}
+
+async function confirmMove() {
+  if (!state.moveTarget) return;
+  try {
+    const res = await apiFetch('/files/move', {
+      method: 'POST',
+      body: JSON.stringify({ src: state.moveTarget.path, destDir: state.selectedDest }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    closeModal('modal-move');
+    await loadFiles();
+    toast(`✓ Moved "${state.moveTarget.name}"`, 'success');
+  } catch (err) {
+    toast('Move failed: ' + err.message, 'error');
+  }
 }
 
 // ─── Upload ──────────────────────────────────────────────
@@ -337,92 +639,80 @@ async function uploadFiles(files) {
   panel.classList.remove('hidden');
   items.innerHTML = '';
 
-  // Create upload items in UI
-  const itemEls = files.map((f, i) => {
+  files.forEach((f, i) => {
     const div = document.createElement('div');
     div.className = 'upload-item';
     div.id = `ui-${i}`;
     div.innerHTML = `
-      <div class="upload-item-name">${f.name}</div>
+      <div class="upload-item-name">${escapeHtml(f.name)}</div>
       <div class="upload-progress-bar"><div class="upload-progress-fill" id="up-fill-${i}" style="width:0%"></div></div>
-      <div class="upload-item-status" id="up-status-${i}">Waiting…</div>
-    `;
+      <div class="upload-item-status" id="up-status-${i}">Waiting…</div>`;
     items.appendChild(div);
-    return div;
   });
 
-  lucide.createIcons();
-
-  // Upload all concurrently (max 3 at a time)
-  const concurrency = 3;
-  for (let i = 0; i < files.length; i += concurrency) {
-    const batch = files.slice(i, i + concurrency);
-    await Promise.all(batch.map((f, bi) => uploadSingleFile(f, i+bi)));
+  // Upload with concurrency = 3
+  for (let i = 0; i < files.length; i += 3) {
+    const batch = files.slice(i, i + 3);
+    await Promise.all(batch.map((f, bi) => uploadSingleFile(f, i + bi)));
   }
 
   await loadFiles();
-  const usedRes = await apiFetch('/auth/me');
-  if (usedRes.ok) {
-    state.user = await usedRes.json();
-    updateStorageBar();
-  }
-  toast(`✓ ${files.length} file(s) uploaded`);
+  const userRes = await apiFetch('/auth/me');
+  if (userRes.ok) { state.user = await userRes.json(); updateStorageBar(); }
+  toast(`✓ ${files.length} file${files.length !== 1 ? 's' : ''} uploaded`, 'success');
 }
 
-async function uploadSingleFile(file, idx) {
-  const fillEl = el(`up-fill-${idx}`);
+// Real upload progress via XHR
+function uploadSingleFile(file, idx) {
+  const fillEl   = el(`up-fill-${idx}`);
   const statusEl = el(`up-status-${idx}`);
-  statusEl.textContent = 'Uploading…';
+  if (statusEl) statusEl.textContent = 'Uploading…';
 
-  // Simulate incremental progress (XHR would give real progress)
-  let prog = 0;
-  const progInterval = setInterval(() => {
-    prog = Math.min(prog + Math.random() * 15, 85);
-    if (fillEl) fillEl.style.width = prog + '%';
-  }, 200);
-
-  try {
+  return new Promise(resolve => {
+    const xhr      = new XMLHttpRequest();
     const formData = new FormData();
     formData.append('files', file);
     formData.append('path', state.currentPath);
-    const res = await fetch('/api/files/upload', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${state.token}` },
-      body: formData,
+
+    xhr.upload.addEventListener('progress', e => {
+      if (e.lengthComputable && fillEl)
+        fillEl.style.width = Math.round((e.loaded / e.total) * 100) + '%';
     });
-    clearInterval(progInterval);
-    if (!res.ok) {
-      const e = await res.json();
-      throw new Error(e.error);
-    }
-    if (fillEl) fillEl.style.width = '100%';
-    if (statusEl) { statusEl.textContent = '✓ Done'; statusEl.className = 'upload-item-status done'; }
-  } catch (err) {
-    clearInterval(progInterval);
-    if (statusEl) { statusEl.textContent = '✗ ' + err.message; statusEl.className = 'upload-item-status error'; }
-  }
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        if (fillEl)   fillEl.style.width = '100%';
+        if (statusEl) { statusEl.textContent = '✓ Done'; statusEl.className = 'upload-item-status done'; }
+      } else {
+        let msg = 'Upload failed';
+        try { msg = JSON.parse(xhr.responseText).error || msg; } catch {}
+        if (statusEl) { statusEl.textContent = '✗ ' + msg; statusEl.className = 'upload-item-status error'; }
+      }
+      resolve();
+    });
+
+    xhr.addEventListener('error', () => {
+      if (statusEl) { statusEl.textContent = '✗ Network error'; statusEl.className = 'upload-item-status error'; }
+      resolve();
+    });
+
+    xhr.open('POST', '/api/files/upload');
+    xhr.setRequestHeader('Authorization', `Bearer ${state.token}`);
+    xhr.send(formData);
+  });
 }
 
 // ─── Drag & Drop ─────────────────────────────────────────
 function setupDragDrop() {
   const body = document.body;
-  const dz = el('drop-zone');
+  const dz   = el('drop-zone');
   let dragCounter = 0;
 
-  body.addEventListener('dragenter', e => {
-    e.preventDefault();
-    dragCounter++;
-    dz.classList.add('drag-over');
-  });
-  body.addEventListener('dragleave', () => {
-    dragCounter--;
-    if (dragCounter <= 0) { dragCounter = 0; dz.classList.remove('drag-over'); }
-  });
+  body.addEventListener('dragenter', e => { e.preventDefault(); dragCounter++; dz.classList.add('drag-over'); });
+  body.addEventListener('dragleave', () => { dragCounter--; if (dragCounter <= 0) { dragCounter = 0; dz.classList.remove('drag-over'); } });
   body.addEventListener('dragover', e => e.preventDefault());
   body.addEventListener('drop', e => {
-    e.preventDefault();
-    dragCounter = 0;
-    dz.classList.remove('drag-over');
+    e.preventDefault(); dragCounter = 0; dz.classList.remove('drag-over');
     const files = Array.from(e.dataTransfer.files);
     if (files.length) uploadFiles(files);
   });
@@ -440,42 +730,49 @@ async function createNewFolder() {
   if (!name) return;
   const folderPath = state.currentPath ? `${state.currentPath}/${name}` : name;
   try {
-    const res = await apiFetch('/files/create-folder', {
-      method: 'POST', body: JSON.stringify({ path: folderPath }),
-    });
+    const res = await apiFetch('/files/create-folder', { method: 'POST', body: JSON.stringify({ path: folderPath }) });
     if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
     closeModal('modal-new-folder');
     await loadFiles();
-    toast('📁 Folder created');
-  } catch(err) { toast('Error: '+err.message); }
+    toast('📁 Folder created', 'success');
+  } catch (err) { toast('Error: ' + err.message, 'error'); }
 }
 
 // ─── Context Menu ─────────────────────────────────────────
 function showCtxMenu(e, idx) {
-  e.preventDefault();
-  e.stopPropagation();
-  state.ctxTarget = state.files[idx];
+  e.preventDefault(); e.stopPropagation();
+  const f = getCurrentFiles()[idx];
+  state.ctxTarget = f;
+
+  // Remove previous active highlight
+  document.querySelectorAll('.file-card.ctx-active').forEach(c => c.classList.remove('ctx-active'));
+  e.currentTarget.classList.add('ctx-active');
+
   const menu = el('ctx-menu');
   menu.classList.remove('hidden');
-  // Position
-  const x = Math.min(e.clientX, window.innerWidth - 180);
-  const y = Math.min(e.clientY, window.innerHeight - 160);
+  const x = Math.min(e.clientX, window.innerWidth  - 190);
+  const y = Math.min(e.clientY, window.innerHeight - 220);
   menu.style.left = x + 'px'; menu.style.top = y + 'px';
 
-  // Hide download/share for folders
-  const isFile = !state.ctxTarget.isDirectory;
+  const isFile = !f.isDirectory;
+  el('ctx-preview').style.display  = isFile && isPreviewable(f.name) ? '' : 'none';
   el('ctx-download').style.display = isFile ? '' : 'none';
-  el('ctx-share').style.display = isFile ? '' : 'none';
+  el('ctx-share').style.display    = isFile ? '' : 'none';
+  el('ctx-move').style.display     = '';
+
+  lucide.createIcons();
 }
 
-document.addEventListener('click', () => el('ctx-menu').classList.add('hidden'));
+document.addEventListener('click', () => {
+  el('ctx-menu').classList.add('hidden');
+  document.querySelectorAll('.file-card.ctx-active').forEach(c => c.classList.remove('ctx-active'));
+});
 
-function ctxDownload() {
-  if (state.ctxTarget) fetchDownload(state.ctxTarget.path);
-}
-function ctxShare() {
-  if (state.ctxTarget) openShareModal(state.ctxTarget);
-}
+function ctxPreview()  { if (state.ctxTarget) previewFile(state.ctxTarget); }
+function ctxDownload() { if (state.ctxTarget) fetchDownload(state.ctxTarget.path); }
+function ctxShare()    { if (state.ctxTarget) openShareModal(state.ctxTarget); }
+function ctxMove()     { if (state.ctxTarget) openMoveModal(state.ctxTarget); }
+
 function ctxRename() {
   if (!state.ctxTarget) return;
   state.renameTarget = state.ctxTarget;
@@ -483,63 +780,61 @@ function ctxRename() {
   openModal('modal-rename');
   setTimeout(() => el('rename-input').select(), 100);
 }
+
 async function ctxDelete() {
   const f = state.ctxTarget;
   if (!f) return;
   if (!confirm(`Delete "${f.name}"? This cannot be undone.`)) return;
   try {
-    const res = await apiFetch(`/files/delete?path=${encodeURIComponent(f.path)}`, { method:'DELETE' });
+    const res  = await apiFetch(`/files/delete?path=${encodeURIComponent(f.path)}`, { method: 'DELETE' });
     if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
     const data = await res.json();
     state.user.usedSpace = data.usedSpace;
     updateStorageBar();
     await loadFiles();
-    toast('🗑️ Deleted');
-  } catch(err) { toast('Error: '+err.message); }
+    toast('🗑️ Deleted', 'success');
+  } catch (err) { toast('Error: ' + err.message, 'error'); }
 }
 
 async function confirmRename() {
   const newName = el('rename-input').value.trim();
   if (!newName || !state.renameTarget) return;
   try {
-    const res = await apiFetch('/files/rename', {
-      method:'POST',
-      body: JSON.stringify({ path: state.renameTarget.path, newName }),
-    });
+    const res = await apiFetch('/files/rename', { method: 'POST', body: JSON.stringify({ path: state.renameTarget.path, newName }) });
     if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
     closeModal('modal-rename');
     await loadFiles();
-    toast('✏️ Renamed');
-  } catch(err) { toast('Error: '+err.message); }
+    toast('✏️ Renamed successfully', 'success');
+  } catch (err) { toast('Error: ' + err.message, 'error'); }
 }
 
 // ─── Share ───────────────────────────────────────────────
 function openShareModal(file) {
   state.shareTarget = file;
   el('share-file-label').textContent = `File: ${file.name}`;
-  el('share-expires').value = '';
-  el('share-max-dl').value = '';
-  el('share-password').value = '';
+  el('share-expires').value   = '';
+  el('share-max-dl').value    = '';
+  el('share-password').value  = '';
   openModal('modal-share');
 }
 
 async function createShareLink() {
   if (!state.shareTarget) return;
   const body = {
-    path: state.shareTarget.path,
-    expiresIn: el('share-expires').value || undefined,
-    maxDownloads: el('share-max-dl').value || undefined,
-    password: el('share-password').value || undefined,
+    path:         state.shareTarget.path,
+    expiresIn:    el('share-expires').value    || undefined,
+    maxDownloads: el('share-max-dl').value     || undefined,
+    password:     el('share-password').value   || undefined,
   };
   try {
-    const res = await apiFetch('/share/create', { method:'POST', body: JSON.stringify(body) });
+    const res  = await apiFetch('/share/create', { method: 'POST', body: JSON.stringify(body) });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     closeModal('modal-share');
     el('share-link-value').value = data.shareUrl;
     el('copy-confirm').classList.add('hidden');
     openModal('modal-share-result');
-  } catch(err) { toast('Error: '+err.message); }
+  } catch (err) { toast('Error: ' + err.message, 'error'); }
 }
 
 function copyShareLink() {
@@ -547,63 +842,63 @@ function copyShareLink() {
   inp.select();
   navigator.clipboard.writeText(inp.value).then(() => {
     el('copy-confirm').classList.remove('hidden');
-    toast('✓ Link copied!');
+    toast('✓ Link copied!', 'success');
   }).catch(() => { document.execCommand('copy'); });
 }
 
 // ─── Shares view ─────────────────────────────────────────
 async function loadShares() {
   try {
-    const res = await apiFetch('/share/list');
+    const res  = await apiFetch('/share/list');
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     state.shares = data;
     renderShares();
-  } catch(err) { toast('Error: '+err.message); }
+  } catch (err) { toast('Error: ' + err.message, 'error'); }
 }
 
 function renderShares() {
-  const list = el('shares-list');
-  const empty = el('shares-empty');
+  const list    = el('shares-list');
+  const empty   = el('shares-empty');
+  const shareBase = `${location.protocol}//${location.host}/share/`;
+
   if (!state.shares.length) {
     list.innerHTML = '';
     empty.classList.remove('hidden');
     return;
   }
   empty.classList.add('hidden');
-  const shareBase = `${location.protocol}//${location.host}/share/`;
   list.innerHTML = state.shares.map(s => `
     <div class="share-row">
       <span class="share-row-icon">${fileIcon(s.fileName, false)}</span>
       <div class="share-row-info">
-        <div class="share-row-name">${s.fileName}</div>
+        <div class="share-row-name">${escapeHtml(s.fileName)}</div>
         <div class="share-row-meta">
           ${s.expiresAt ? `<span class="share-tag">⏰ Expires ${timeAgo(s.expiresAt)}</span>` : '<span class="share-tag">No expiry</span>'}
           ${s.maxDownloads ? `<span class="share-tag">⬇️ ${s.downloadCount}/${s.maxDownloads}</span>` : `<span class="share-tag">⬇️ ${s.downloadCount}</span>`}
           ${s.password ? '<span class="share-tag">🔒 Password</span>' : ''}
         </div>
-        <div class="share-link-copy" onclick="navigator.clipboard.writeText('${shareBase+s.token}').then(()=>toast('✓ Copied'))">
-          ${shareBase+s.token}
+        <div class="share-link-copy" onclick="navigator.clipboard.writeText('${shareBase + s.token}').then(()=>toast('✓ Copied', 'success'))">
+          ${shareBase + s.token}
         </div>
       </div>
       <div class="share-row-actions">
-        <button class="btn btn-ghost" onclick="navigator.clipboard.writeText('${shareBase+s.token}').then(()=>toast('✓ Copied'))">
+        <button class="btn btn-ghost" onclick="navigator.clipboard.writeText('${shareBase + s.token}').then(()=>toast('✓ Copied', 'success'))">
           <i data-lucide="copy"></i>
         </button>
         <button class="btn btn-danger" onclick="deleteShare('${s.token}')">
           <i data-lucide="trash-2"></i>
         </button>
       </div>
-    </div>
-  `).join('');
+    </div>`).join('');
   lucide.createIcons();
 }
 
 async function deleteShare(token) {
   if (!confirm('Delete this share link?')) return;
-  const res = await apiFetch(`/share/delete/${token}`, { method:'DELETE' });
-  if (res.ok) { toast('🗑️ Share removed'); loadShares(); }
-  else toast('Error deleting share');
+  const res = await apiFetch(`/share/delete/${token}`, { method: 'DELETE' });
+  if (res.ok) { toast('🗑️ Share removed', 'success'); loadShares(); }
+  else toast('Error deleting share', 'error');
 }
 
 // ─── Public Share Page ────────────────────────────────────
@@ -611,40 +906,38 @@ async function loadSharePage(token) {
   el('public-share-page').classList.remove('hidden');
   lucide.createIcons();
   try {
-    const res = await fetch(`/api/share/info/${token}`);
+    const res  = await fetch(`/api/share/info/${token}`);
     const data = await res.json();
     if (!res.ok) {
       el('share-dl-filename').textContent = 'Link Unavailable';
-      el('share-dl-meta').textContent = data.error || 'This link is no longer valid.';
+      el('share-dl-meta').textContent     = data.error || 'This link is no longer valid.';
       el('share-dl-btn').disabled = true;
       return;
     }
     el('share-dl-filename').textContent = data.fileName;
     const meta = [`Shared by ${data.owner}`];
-    if (data.expiresAt) meta.push(`Expires ${timeAgo(data.expiresAt)}`);
+    if (data.expiresAt)    meta.push(`Expires ${timeAgo(data.expiresAt)}`);
     if (data.maxDownloads) meta.push(`${data.downloadCount}/${data.maxDownloads} downloads`);
     el('share-dl-meta').textContent = meta.join(' · ');
-    if (data.hasPassword) {
-      el('share-dl-password-area').classList.remove('hidden');
-    }
+    if (data.hasPassword) el('share-dl-password-area').classList.remove('hidden');
   } catch {
     el('share-dl-filename').textContent = 'Error';
-    el('share-dl-meta').textContent = 'Could not load file info.';
+    el('share-dl-meta').textContent     = 'Could not load file info.';
     el('share-dl-btn').disabled = true;
   }
   lucide.createIcons();
 }
 
 async function downloadSharedFile() {
-  const token = state.shareToken;
+  const token    = state.shareToken;
   const password = el('share-dl-password').value || undefined;
   el('share-dl-error').textContent = '';
-  el('share-dl-btn').disabled = true;
-  el('share-dl-btn').textContent = 'Downloading…';
+  el('share-dl-btn').disabled      = true;
+  el('share-dl-btn').textContent   = 'Downloading…';
   try {
     const res = await fetch(`/api/share/download/${token}`, {
       method: 'POST',
-      headers: { 'Content-Type':'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password }),
     });
     if (!res.ok) {
@@ -652,18 +945,17 @@ async function downloadSharedFile() {
       el('share-dl-error').textContent = e.error;
       el('share-dl-btn').disabled = false;
       el('share-dl-btn').innerHTML = '<i data-lucide="download"></i> Download File';
-      lucide.createIcons();
-      return;
+      lucide.createIcons(); return;
     }
-    const blob = await res.blob();
-    const cd = res.headers.get('Content-Disposition') || '';
+    const blob      = await res.blob();
+    const cd        = res.headers.get('Content-Disposition') || '';
     const nameMatch = cd.match(/filename="?([^"]+)"?/);
-    const fileName = nameMatch ? decodeURIComponent(nameMatch[1]) : 'download';
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = fileName; a.click();
+    const fileName  = nameMatch ? decodeURIComponent(nameMatch[1]) : 'download';
+    const url       = URL.createObjectURL(blob);
+    const a         = document.createElement('a'); a.href = url; a.download = fileName; a.click();
     URL.revokeObjectURL(url);
-  } catch(err) {
-    el('share-dl-error').textContent = 'Download failed: '+err.message;
+  } catch (err) {
+    el('share-dl-error').textContent = 'Download failed: ' + err.message;
   } finally {
     el('share-dl-btn').disabled = false;
     el('share-dl-btn').innerHTML = '<i data-lucide="download"></i> Download File';
@@ -681,28 +973,25 @@ async function refreshAdmin() {
     ]);
     const stats = await statsRes.json();
     const users = await usersRes.json();
-    const logs = await logsRes.json();
+    const logs  = await logsRes.json();
 
-    // Stats cards
-    el('stat-users').textContent = `${stats.users.active} / ${stats.users.total}`;
-    el('stat-shares').textContent = stats.shares.total;
-    const memPct = ((stats.memory.used/stats.memory.total)*100).toFixed(0);
-    el('stat-mem').textContent = `${memPct}%`;
+    el('stat-users').textContent   = `${stats.users.active} / ${stats.users.total}`;
+    el('stat-shares').textContent  = stats.shares.total;
+    const memPct = ((stats.memory.used / stats.memory.total) * 100).toFixed(0);
+    el('stat-mem').textContent     = `${memPct}%`;
     el('stat-storage').textContent = formatBytes(stats.storage.used);
 
-    // Users table
-    const tbody = el('users-tbody');
-    tbody.innerHTML = users.map(u => `
+    el('users-tbody').innerHTML = users.map(u => `
       <tr>
-        <td><strong>${u.username}</strong></td>
+        <td><strong>${escapeHtml(u.username)}</strong></td>
         <td><span class="role-badge ${u.role}">${u.role}</span></td>
         <td>
           <span class="status-badge ${u.status}">
             <span class="status-dot"></span>${u.status}
           </span>
         </td>
-        <td>${formatBytes(u.usedSpace||0)}</td>
-        <td>${formatBytes(u.quota||0)}</td>
+        <td>${formatBytes(u.usedSpace || 0)}</td>
+        <td>${formatBytes(u.quota || 0)}</td>
         <td>${u.createdAt ? timeAgo(u.createdAt) : '—'}</td>
         <td>
           <div style="display:flex;gap:.35rem;flex-wrap:wrap">
@@ -722,68 +1011,61 @@ async function refreshAdmin() {
             </button>` : ''}
           </div>
         </td>
-      </tr>
-    `).join('');
+      </tr>`).join('');
 
-    // Logs
     const logConsole = el('log-console');
     const actionClass = a => {
       if (['delete','admin_delete_user'].includes(a)) return 'delete';
-      if (['login','register'].includes(a)) return 'login';
-      if (['upload'].includes(a)) return 'upload';
-      if (['share_create'].includes(a)) return 'share_create';
+      if (['login','register'].includes(a))           return 'login';
+      if (['upload'].includes(a))                     return 'upload';
+      if (['share_create'].includes(a))               return 'share_create';
       return '';
     };
     logConsole.innerHTML = logs.map(l => `
       <div class="log-entry">
         <span class="log-time">[${new Date(l.timestamp).toLocaleTimeString()}]</span>
         <span class="log-action ${actionClass(l.action)}">&nbsp;${l.action}&nbsp;</span>
-        <span>${l.username||l.by||''}</span>
-        ${l.file ? `→ <span style="color:var(--text-secondary)">${l.file}</span>` : ''}
-        ${l.ip ? `<span style="color:var(--text-muted);font-size:.7rem"> from ${l.ip}</span>` : ''}
-      </div>
-    `).join('');
+        <span>${escapeHtml(l.username || l.by || '')}</span>
+        ${l.file  ? `→ <span style="color:var(--text-secondary)">${escapeHtml(l.file)}</span>` : ''}
+        ${l.ip    ? `<span style="color:var(--text-muted);font-size:.7rem"> from ${l.ip}</span>` : ''}
+      </div>`).join('');
 
     lucide.createIcons();
-  } catch(err) {
-    toast('Admin error: '+err.message);
+  } catch (err) {
+    toast('Admin error: ' + err.message, 'error');
   }
 }
 
 function openQuotaModal(username, currentQuota) {
   window._quotaTarget = username;
   el('quota-user-label').textContent = `Set quota for: ${username}`;
-  const sel = el('quota-select');
-  // Select closest option
+  const sel  = el('quota-select');
   const opts = Array.from(sel.options);
-  const closest = opts.reduce((a,b) => Math.abs(parseInt(b.value)-currentQuota) < Math.abs(parseInt(a.value)-currentQuota) ? b : a);
+  const closest = opts.reduce((a, b) =>
+    Math.abs(parseInt(b.value) - currentQuota) < Math.abs(parseInt(a.value) - currentQuota) ? b : a);
   sel.value = closest.value;
   openModal('modal-quota');
 }
 
 async function applyQuota() {
   const username = window._quotaTarget;
-  const quota = el('quota-select').value;
-  const res = await apiFetch(`/admin/users/${username}/quota`, {
-    method:'PUT', body: JSON.stringify({ quota }),
-  });
-  if (res.ok) { closeModal('modal-quota'); toast(`✓ Quota updated`); refreshAdmin(); }
-  else toast('Error updating quota');
+  const quota    = el('quota-select').value;
+  const res      = await apiFetch(`/admin/users/${username}/quota`, { method: 'PUT', body: JSON.stringify({ quota }) });
+  if (res.ok) { closeModal('modal-quota'); toast('✓ Quota updated', 'success'); refreshAdmin(); }
+  else toast('Error updating quota', 'error');
 }
 
 async function toggleUserStatus(username, newStatus) {
-  const res = await apiFetch(`/admin/users/${username}/status`, {
-    method:'PUT', body: JSON.stringify({ status: newStatus }),
-  });
-  if (res.ok) { toast(`✓ ${username} ${newStatus}`); refreshAdmin(); }
-  else toast('Error updating status');
+  const res = await apiFetch(`/admin/users/${username}/status`, { method: 'PUT', body: JSON.stringify({ status: newStatus }) });
+  if (res.ok) { toast(`✓ ${username} ${newStatus}`, 'success'); refreshAdmin(); }
+  else toast('Error updating status', 'error');
 }
 
 async function deleteUser(username) {
-  if (!confirm(`Permanently delete user "${username}"?`)) return;
-  const res = await apiFetch(`/admin/users/${username}`, { method:'DELETE' });
-  if (res.ok) { toast(`🗑️ User deleted`); refreshAdmin(); }
-  else toast('Error deleting user');
+  if (!confirm(`Permanently delete user "${username}"? All their files will be lost.`)) return;
+  const res = await apiFetch(`/admin/users/${username}`, { method: 'DELETE' });
+  if (res.ok) { toast('🗑️ User deleted', 'success'); refreshAdmin(); }
+  else toast('Error deleting user', 'error');
 }
 
 // ─── Modal helpers ────────────────────────────────────────
@@ -795,15 +1077,20 @@ function closeModal(id) {
   el(id).classList.add('hidden');
 }
 
-// Enter key shortcuts in modals
+// Keyboard shortcuts
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(m => m.classList.add('hidden'));
     el('ctx-menu').classList.add('hidden');
+    document.querySelectorAll('.file-card.ctx-active').forEach(c => c.classList.remove('ctx-active'));
   }
   if (e.key === 'Enter') {
     if (!el('modal-new-folder').classList.contains('hidden')) createNewFolder();
-    if (!el('modal-rename').classList.contains('hidden')) confirmRename();
+    if (!el('modal-rename').classList.contains('hidden'))     confirmRename();
+  }
+  if (e.key === 'f' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    el('search-input')?.focus();
   }
 });
 

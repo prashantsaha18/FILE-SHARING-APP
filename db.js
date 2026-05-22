@@ -143,6 +143,12 @@ async function getLogs(limit = 100) {
   return logs.slice(0, limit);
 }
 
+// Get logs filtered by a specific user
+async function getLogsByUser(username, limit = 50) {
+  const logs = await read('logs');
+  return logs.filter(l => l.username === username || l.by === username).slice(0, limit);
+}
+
 module.exports = {
   init,
   getUsers,
@@ -158,4 +164,5 @@ module.exports = {
   getSharesByUser,
   addLog,
   getLogs,
+  getLogsByUser,
 };
