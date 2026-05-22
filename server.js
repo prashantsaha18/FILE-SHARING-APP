@@ -52,6 +52,21 @@ function formatBytes(bytes) {
   return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
 }
 
+// ─── DB Auto-initialization Middleware (for Serverless/Vercel compatibility) ──
+let dbInitialized = false;
+app.use(async (req, res, next) => {
+  if (!dbInitialized) {
+    try {
+      await db.init();
+      await fm.ensureUserHome('admin');
+      dbInitialized = true;
+    } catch (err) {
+      console.error('Database initialization failed:', err);
+    }
+  }
+  next();
+});
+
 // ─── Auth Routes ─────────────────────────────────────────────────────────────
 
 // POST /api/auth/register  (rate limited)
@@ -497,4 +512,8 @@ async function start() {
   });
 }
 
-start().catch(console.error);
+if (require.main === module) {
+  start().catch(console.error);
+}
+
+module.exports = app;

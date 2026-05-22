@@ -5,13 +5,17 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = process.env.VERCEL
+  ? path.join('/tmp', 'data')
+  : path.join(__dirname, 'data');
 
 const FILES = {
   users: path.join(DATA_DIR, 'users.json'),
   shares: path.join(DATA_DIR, 'shares.json'),
   logs: path.join(DATA_DIR, 'logs.json'),
 };
+
+const SRC_DATA_DIR = path.join(__dirname, 'data');
 
 // Ensure data directory and files exist
 async function init() {
@@ -20,27 +24,40 @@ async function init() {
     try {
       await fs.access(filePath);
     } catch {
-      let defaultData;
-      if (key === 'users') {
-        // Create default admin user (password: admin123)
-        const bcrypt = require('bcryptjs');
-        const hash = await bcrypt.hash('admin123', 10);
-        defaultData = [
-          {
-            username: 'admin',
-            password: hash,
-            role: 'admin',
-            email: 'admin@fileshare.local',
-            createdAt: new Date().toISOString(),
-            quota: 10737418240, // 10 GB
-            usedSpace: 0,
-            status: 'active',
-          },
-        ];
-      } else {
-        defaultData = [];
+      let copied = false;
+      if (process.env.VERCEL) {
+        try {
+          const srcFilePath = path.join(SRC_DATA_DIR, `${key}.json`);
+          await fs.access(srcFilePath);
+          const data = await fs.readFile(srcFilePath, 'utf-8');
+          await fs.writeFile(filePath, data, 'utf-8');
+          copied = true;
+        } catch (_) {}
       }
-      await fs.writeFile(filePath, JSON.stringify(defaultData, null, 2), 'utf-8');
+
+      if (!copied) {
+        let defaultData;
+        if (key === 'users') {
+          // Create default admin user (password: admin123)
+          const bcrypt = require('bcryptjs');
+          const hash = await bcrypt.hash('admin123', 10);
+          defaultData = [
+            {
+              username: 'admin',
+              password: hash,
+              role: 'admin',
+              email: 'admin@fileshare.local',
+              createdAt: new Date().toISOString(),
+              quota: 10737418240, // 10 GB
+              usedSpace: 0,
+              status: 'active',
+            },
+          ];
+        } else {
+          defaultData = [];
+        }
+        await fs.writeFile(filePath, JSON.stringify(defaultData, null, 2), 'utf-8');
+      }
     }
   }
 }

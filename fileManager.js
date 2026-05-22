@@ -6,7 +6,9 @@ const fs = require('fs').promises;
 const fsSync = require('fs');
 const path = require('path');
 
-const STORAGE_ROOT = path.join(__dirname, 'storage', 'users');
+const STORAGE_ROOT = process.env.VERCEL
+  ? path.join('/tmp', 'storage', 'users')
+  : path.join(__dirname, 'storage', 'users');
 
 // Get user's home directory (creates if missing)
 function getUserHome(username) {
