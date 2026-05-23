@@ -103,6 +103,9 @@
       <a href="#" class="nav-item" id="nav-analytics" onclick="switchView('analytics', event)">
         <i data-lucide="bar-chart-2"></i> <span>Analytics</span>
       </a>
+      <a href="#" class="nav-item" id="nav-webdav" onclick="switchView('webdav', event)">
+        <i data-lucide="network"></i> <span>Network Drive</span>
+      </a>
       <a href="#" class="nav-item admin-only hidden" id="nav-admin" onclick="switchView('admin', event)">
         <i data-lucide="shield"></i> <span>Admin Panel</span>
       </a>
@@ -327,6 +330,81 @@
       <div class="admin-section glass" style="margin-top:1.5rem;">
         <h3 class="admin-section-title"><i data-lucide="activity"></i> Recent Activity Logs</h3>
         <div class="log-console" id="user-log-console"></div>
+      </div>
+    </section>
+
+    <!-- ── WEBDAV / NETWORK DRIVE VIEW ── -->
+    <section id="view-webdav" class="view hidden">
+      <div class="topbar">
+        <div class="topbar-left">
+          <button class="hamburger btn-icon" onclick="toggleSidebar()">
+            <i data-lucide="menu"></i>
+          </button>
+          <h2 class="view-title">Network Drive</h2>
+        </div>
+      </div>
+
+      <div class="admin-section glass" style="margin-top:0.5rem; max-width:800px; padding: 2rem;">
+        <h3 class="admin-section-title" style="font-size: 1.35rem; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;"><i data-lucide="network"></i> Mount NexDrop as a Network Drive</h3>
+        <p style="color: var(--text-muted); line-height: 1.6; margin-bottom: 1.5rem; font-size: 0.95rem;">
+          NexDrop supports the standard **WebDAV** protocol. You can access and manage your files directly from your computer's native file explorer (Windows Explorer, macOS Finder, or Linux Files) just like a local USB drive.
+        </p>
+
+        <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); padding: 1.25rem; border-radius: 8px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem; gap: 1rem; flex-wrap: wrap;">
+          <div style="flex: 1; min-width: 250px;">
+            <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.35rem; text-transform: uppercase; letter-spacing: 0.5px;">Your Personal WebDAV URL</span>
+            <code id="webdav-url-display" style="font-family: monospace; font-size: 1.05rem; color: var(--primary); font-weight: 600; word-break: break-all;">http://localhost:3000/webdav</code>
+          </div>
+          <button class="btn btn-primary" onclick="copyWebDAVUrl()" style="padding: 0.6rem 1.2rem; display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem;">
+            <i data-lucide="copy" style="width: 16px; height: 16px;"></i> Copy URL
+          </button>
+        </div>
+
+        <h4 style="margin-bottom: 1rem; font-size: 1.1rem; color: var(--text-primary); display: flex; align-items: center; gap: 0.5rem;">
+          <i data-lucide="help-circle" style="width:18px; height:18px;"></i> How to Mount on Your OS
+        </h4>
+
+        <div style="display: flex; gap: 0.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">
+          <button class="btn btn-ghost active" id="btn-mount-win" onclick="switchMountInstructions('win')" style="padding: 0.4rem 0.9rem; font-size: 0.85rem;">Windows</button>
+          <button class="btn btn-ghost" id="btn-mount-mac" onclick="switchMountInstructions('mac')" style="padding: 0.4rem 0.9rem; font-size: 0.85rem;">macOS</button>
+          <button class="btn btn-ghost" id="btn-mount-linux" onclick="switchMountInstructions('linux')" style="padding: 0.4rem 0.9rem; font-size: 0.85rem;">Linux</button>
+        </div>
+
+        <div id="instructions-win" class="mount-inst">
+          <ol style="margin-left: 1.25rem; line-height: 1.9; color: var(--text-muted); font-size: 0.9rem;">
+            <li>Open <strong>This PC</strong> in Windows File Explorer.</li>
+            <li>Click <strong>Computer</strong> in the top ribbon and select <strong>Map network drive</strong>.</li>
+            <li>Select a drive letter of your choice (e.g., <code>Z:</code>).</li>
+            <li>In the <strong>Folder</strong> input field, paste your WebDAV URL shown above.</li>
+            <li>Check both <strong>Reconnect at sign-in</strong> and <strong>Connect using different credentials</strong>, then click <strong>Finish</strong>.</li>
+            <li>When prompted, enter your NexDrop **username** and **password**.</li>
+            <li>Click OK. Your NexDrop files will now appear as a new drive under "This PC"!</li>
+          </ol>
+        </div>
+
+        <div id="instructions-mac" class="mount-inst hidden">
+          <ol style="margin-left: 1.25rem; line-height: 1.9; color: var(--text-muted); font-size: 0.9rem;">
+            <li>Open <strong>Finder</strong> on your Mac.</li>
+            <li>Press <strong>Cmd + K</strong> on your keyboard (or click <strong>Go &gt; Connect to Server...</strong> in the top menu bar).</li>
+            <li>In the <strong>Server Address</strong> box, paste your WebDAV URL shown above.</li>
+            <li>Click the <strong>Connect</strong> button.</li>
+            <li>Select <strong>Registered User</strong>.</li>
+            <li>Enter your NexDrop **username** and **password**, then click <strong>Connect</strong>.</li>
+            <li>Your storage will now mount on your Desktop and inside Finder under Locations!</li>
+          </ol>
+        </div>
+
+        <div id="instructions-linux" class="mount-inst hidden">
+          <ol style="margin-left: 1.25rem; line-height: 1.9; color: var(--text-muted); font-size: 0.9rem;">
+            <li>Open your desktop file manager (e.g., GNOME Files / Nautilus).</li>
+            <li>Click <strong>+ Other Locations</strong> at the bottom of the sidebar.</li>
+            <li>In the <strong>Connect to Server</strong> box at the bottom, enter your URL, but replace `http://` with `dav://` (or `https://` with `davs://`):<br>
+              <code style="background: rgba(255,255,255,0.05); padding: 0.15rem 0.4rem; border-radius: 4px; font-family: monospace; display: inline-block; margin: 0.25rem 0; color: var(--primary);">dav://localhost:3000/webdav</code>
+            </li>
+            <li>Click <strong>Connect</strong>.</li>
+            <li>Select **Registered User**, enter your NexDrop **username** and **password**, and click **Connect**.</li>
+          </ol>
+        </div>
       </div>
     </section>
 

@@ -24,6 +24,11 @@ const PORT = process.env.PORT || 3000;
 // ─── Security Middleware ─────────────────────────────────────────────────────
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
+
+// WebDAV mount must be BEFORE body parsers to keep the upload streams intact
+const webdavRouter = require('./webdav');
+app.use('/webdav', webdavRouter);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));

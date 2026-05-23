@@ -231,6 +231,11 @@ async function initApp() {
   el('user-avatar-letter').textContent = state.user.username[0].toUpperCase();
   updateStorageBar();
 
+  // Dynamic WebDAV URL binding
+  if (el('webdav-url-display')) {
+    el('webdav-url-display').textContent = `${location.protocol}//${location.host}/webdav`;
+  }
+
   // Admin nav
   if (state.user.role === 'admin') {
     document.querySelectorAll('.admin-only').forEach(e => e.classList.remove('hidden'));
@@ -1591,6 +1596,43 @@ document.addEventListener('keydown', e => {
     }
   }
 });
+
+// ─── WebDAV UI Handlers ───────────────────────────────────
+function copyWebDAVUrl() {
+  const display = el('webdav-url-display');
+  if (!display) return;
+  
+  navigator.clipboard.writeText(display.textContent).then(() => {
+    toast('✓ WebDAV URL copied to clipboard!', 'success');
+  }).catch(() => {
+    // Fallback if navigator.clipboard is not available
+    const tempInput = document.createElement('input');
+    tempInput.value = display.textContent;
+    document.body.appendChild(tempInput);
+    tempInput.select();
+    document.execCommand('copy');
+    document.body.removeChild(tempInput);
+    toast('✓ WebDAV URL copied to clipboard!', 'success');
+  });
+}
+
+function switchMountInstructions(os) {
+  const winBtn = el('btn-mount-win');
+  const macBtn = el('btn-mount-mac');
+  const linuxBtn = el('btn-mount-linux');
+  
+  const winInst = el('instructions-win');
+  const macInst = el('instructions-mac');
+  const linuxInst = el('instructions-linux');
+  
+  if (winBtn) winBtn.classList.toggle('active', os === 'win');
+  if (macBtn) macBtn.classList.toggle('active', os === 'mac');
+  if (linuxBtn) linuxBtn.classList.toggle('active', os === 'linux');
+  
+  if (winInst) winInst.classList.toggle('hidden', os !== 'win');
+  if (macInst) macInst.classList.toggle('hidden', os !== 'mac');
+  if (linuxInst) linuxInst.classList.toggle('hidden', os !== 'linux');
+}
 
 // ─── Start ────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', initApp);
