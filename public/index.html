@@ -91,8 +91,17 @@
       <a href="#" class="nav-item active" id="nav-files" onclick="switchView('files', event)">
         <i data-lucide="folder-open"></i> <span>My Files</span>
       </a>
+      <a href="#" class="nav-item" id="nav-shared" onclick="switchView('shared', event)">
+        <i data-lucide="users"></i> <span>Shared with me</span>
+      </a>
       <a href="#" class="nav-item" id="nav-shares" onclick="switchView('shares', event)">
         <i data-lucide="share-2"></i> <span>Shared Links</span>
+      </a>
+      <a href="#" class="nav-item" id="nav-trash" onclick="switchView('trash', event)">
+        <i data-lucide="trash-2"></i> <span>Recycle Bin</span>
+      </a>
+      <a href="#" class="nav-item" id="nav-analytics" onclick="switchView('analytics', event)">
+        <i data-lucide="bar-chart-2"></i> <span>Analytics</span>
       </a>
       <a href="#" class="nav-item admin-only hidden" id="nav-admin" onclick="switchView('admin', event)">
         <i data-lucide="shield"></i> <span>Admin Panel</span>
@@ -213,6 +222,111 @@
         <i data-lucide="share-2" class="empty-icon"></i>
         <p>No shared links yet</p>
         <p class="empty-sub">Right-click a file and select "Share" to create a link</p>
+      </div>
+    </section>
+
+    <!-- ── SHARED WITH ME VIEW ── -->
+    <section id="view-shared" class="view hidden">
+      <div class="topbar">
+        <div class="topbar-left">
+          <button class="hamburger btn-icon" onclick="toggleSidebar()">
+            <i data-lucide="menu"></i>
+          </button>
+          <div>
+            <h2 class="view-title">Shared with me</h2>
+            <div class="breadcrumb" id="shared-breadcrumb">Workspace Collaboration</div>
+          </div>
+        </div>
+      </div>
+      <div class="file-grid" id="shared-grid">
+        <!-- populated by JS -->
+      </div>
+      <div class="empty-state hidden" id="shared-empty">
+        <i data-lucide="users" class="empty-icon"></i>
+        <p>No shared files yet</p>
+        <p class="empty-sub">When other users share files with you, they will appear here</p>
+      </div>
+    </section>
+
+    <!-- ── RECYCLE BIN VIEW ── -->
+    <section id="view-trash" class="view hidden">
+      <div class="topbar">
+        <div class="topbar-left">
+          <button class="hamburger btn-icon" onclick="toggleSidebar()">
+            <i data-lucide="menu"></i>
+          </button>
+          <h2 class="view-title">Recycle Bin</h2>
+        </div>
+        <button class="btn btn-ghost danger" onclick="confirmEmptyTrash()" id="empty-trash-btn">
+          <i data-lucide="trash-2"></i> Empty Recycle Bin
+        </button>
+      </div>
+      <div class="file-grid" id="trash-grid">
+        <!-- populated by JS -->
+      </div>
+      <div class="empty-state hidden" id="trash-empty">
+        <i data-lucide="trash-2" class="empty-icon"></i>
+        <p>Recycle Bin is empty</p>
+        <p class="empty-sub">Items moved to the trash will appear here for easy restoration</p>
+      </div>
+    </section>
+
+    <!-- ── USER ANALYTICS VIEW ── -->
+    <section id="view-analytics" class="view hidden">
+      <div class="topbar">
+        <div class="topbar-left">
+          <button class="hamburger btn-icon" onclick="toggleSidebar()">
+            <i data-lucide="menu"></i>
+          </button>
+          <h2 class="view-title">Analytics & Activity</h2>
+        </div>
+        <button class="btn btn-ghost" onclick="refreshAnalytics()">
+          <i data-lucide="refresh-cw"></i> Refresh
+        </button>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card glass" style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1.5rem;min-height:220px;">
+          <h4 style="font-size:.85rem;color:var(--text-muted);align-self:flex-start;margin-bottom:auto;"><i data-lucide="database"></i> Storage Distribution</h4>
+          <div id="analytics-storage-chart-container" style="width:100%;max-width:110px;height:110px;margin:0 auto;">
+            <!-- dynamic SVG Donut chart populated by JS -->
+          </div>
+          <p id="analytics-storage-legend" style="font-size:.75rem;color:var(--text-muted);text-align:center;margin-top:auto;">—</p>
+        </div>
+
+        <div class="stat-card glass" style="display:flex;flex-direction:column;justify-content:center;padding:1.5rem;">
+          <h4 style="font-size:.85rem;color:var(--text-muted);align-self:flex-start;margin-bottom:auto;"><i data-lucide="share-2"></i> Share Summary</h4>
+          <div style="display:flex;gap:1.5rem;width:100%;margin-top:1.5rem;">
+            <div style="flex:1;">
+              <p class="stat-value" id="val-total-links" style="font-size:2rem;line-height:1;">0</p>
+              <p class="stat-label" style="font-size:.75rem;margin-top:.25rem;">Active Links</p>
+            </div>
+            <div style="flex:1;">
+              <p class="stat-value" id="val-total-downloads" style="font-size:2rem;line-height:1;">0</p>
+              <p class="stat-label" style="font-size:.75rem;margin-top:.25rem;">Downloads</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="stat-card glass" style="display:flex;flex-direction:column;justify-content:center;padding:1.5rem;">
+          <h4 style="font-size:.85rem;color:var(--text-muted);align-self:flex-start;margin-bottom:auto;"><i data-lucide="users"></i> Collaboration</h4>
+          <div style="display:flex;gap:1.5rem;width:100%;margin-top:1.5rem;">
+            <div style="flex:1;">
+              <p class="stat-value" id="val-collab-with-me" style="font-size:2rem;line-height:1;">0</p>
+              <p class="stat-label" style="font-size:.75rem;margin-top:.25rem;">Shared with me</p>
+            </div>
+            <div style="flex:1;">
+              <p class="stat-value" id="val-collab-with-others" style="font-size:2rem;line-height:1;">0</p>
+              <p class="stat-label" style="font-size:.75rem;margin-top:.25rem;">Shared with others</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Activity Timeline -->
+      <div class="admin-section glass" style="margin-top:1.5rem;">
+        <h3 class="admin-section-title"><i data-lucide="activity"></i> Recent Activity Logs</h3>
+        <div class="log-console" id="user-log-console"></div>
       </div>
     </section>
 
@@ -413,7 +527,14 @@
   <div class="preview-inner" onclick="event.stopPropagation()">
     <div class="preview-header">
       <h3 id="preview-filename">File Preview</h3>
-      <div style="display:flex;gap:.35rem">
+      <div style="display:flex;align-items:center;gap:.35rem">
+        <span id="editor-save-status" class="editor-save-status hidden" style="font-size:.75rem;color:var(--text-muted);margin-right:.5rem;">✓ Saved</span>
+        <button class="btn btn-ghost" id="preview-edit-btn" style="padding:.35rem .75rem;font-size:.8rem;display:none;">
+          <i data-lucide="pencil"></i> Edit File
+        </button>
+        <button class="btn btn-ghost" id="preview-save-btn" style="padding:.35rem .75rem;font-size:.8rem;display:none;" onclick="triggerFileSave()">
+          <i data-lucide="save"></i> Save
+        </button>
         <button class="btn btn-ghost" id="preview-download-btn" style="padding:.35rem .75rem;font-size:.8rem">
           <i data-lucide="download"></i> Download
         </button>
@@ -422,6 +543,46 @@
     </div>
     <div class="preview-body" id="preview-body">
       <div class="preview-loading"><i data-lucide="loader-2" class="spin-icon"></i> Loading preview…</div>
+    </div>
+  </div>
+</div>
+
+<!-- Collaboration Sharing modal -->
+<div id="modal-collaborate" class="modal-overlay hidden" onclick="closeModal('modal-collaborate')">
+  <div class="modal glass" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3><i data-lucide="users"></i> Collaboration Workspace</h3>
+      <button class="btn-icon" onclick="closeModal('modal-collaborate')"><i data-lucide="x"></i></button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-file-label" id="collab-file-label">File: —</p>
+      
+      <div class="collab-add-section" style="margin-top:1rem;display:flex;gap:.5rem;flex-direction:column;">
+        <label class="form-label">Add Collaborator</label>
+        <div style="display:flex;gap:.5rem;">
+          <div class="input-group" style="flex:1;">
+            <i data-lucide="user" class="input-icon"></i>
+            <input id="collab-username" type="text" placeholder="Enter username" />
+          </div>
+          <select id="collab-access" class="form-select" style="width:110px;">
+            <option value="read">Viewer</option>
+            <option value="write">Editor</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="addCollabUser()" id="add-collab-btn" style="align-self:flex-end;padding:.35rem .75rem;font-size:.85rem;margin-top:.25rem;">
+          <i data-lucide="user-plus"></i> Add User
+        </button>
+      </div>
+
+      <div class="collab-list-section" style="margin-top:1.25rem;">
+        <label class="form-label" style="margin-bottom:.5rem;">Active Access List</label>
+        <div id="collab-list-container" class="collab-list-container" style="max-height:160px;overflow-y:auto;display:flex;flex-direction:column;gap:.4rem;">
+          <!-- populated by JS -->
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="closeModal('modal-collaborate')">Done</button>
     </div>
   </div>
 </div>
@@ -495,12 +656,17 @@
 <div id="ctx-menu" class="context-menu glass hidden">
   <button class="ctx-item" id="ctx-preview" onclick="ctxPreview()"><i data-lucide="eye"></i> Preview</button>
   <button class="ctx-item" id="ctx-download" onclick="ctxDownload()"><i data-lucide="download"></i> Download</button>
-  <button class="ctx-item" id="ctx-share" onclick="ctxShare()"><i data-lucide="share-2"></i> Share</button>
-  <div class="ctx-divider"></div>
-  <button class="ctx-item" onclick="ctxRename()"><i data-lucide="pencil"></i> Rename</button>
+  <button class="ctx-item" id="ctx-share" onclick="ctxShare()"><i data-lucide="link"></i> Create Share Link</button>
+  <button class="ctx-item" id="ctx-collaborate" onclick="ctxCollaborate()"><i data-lucide="users"></i> Workspace Access</button>
+  <div class="ctx-divider" id="ctx-div-1"></div>
+  <button class="ctx-item" id="ctx-rename" onclick="ctxRename()"><i data-lucide="pencil"></i> Rename</button>
   <button class="ctx-item" id="ctx-move" onclick="ctxMove()"><i data-lucide="move"></i> Move</button>
-  <div class="ctx-divider"></div>
-  <button class="ctx-item danger" onclick="ctxDelete()"><i data-lucide="trash-2"></i> Delete</button>
+  <div class="ctx-divider" id="ctx-div-2"></div>
+  <button class="ctx-item danger" id="ctx-delete" onclick="ctxDelete()"><i data-lucide="trash-2"></i> Move to Trash</button>
+  
+  <!-- Recycle Bin specific context options -->
+  <button class="ctx-item" id="ctx-restore" onclick="ctxRestore()" style="display:none;"><i data-lucide="refresh-cw"></i> Restore</button>
+  <button class="ctx-item danger" id="ctx-purge" onclick="ctxPurge()" style="display:none;"><i data-lucide="trash"></i> Delete Permanently</button>
 </div>
 
 <!-- Toast notification -->

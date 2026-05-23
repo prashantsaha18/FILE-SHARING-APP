@@ -7,9 +7,7 @@ node_modules/
 .env.*.local
 
 # User data and storage (sensitive / machine-specific)
-data/users.json
-data/shares.json
-data/logs.json
+data/
 storage/
 
 # OS / Editor

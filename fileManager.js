@@ -40,7 +40,9 @@ async function listDirectory(username, relPath = '') {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
   const results = await Promise.all(
-    entries.map(async (entry) => {
+    entries
+      .filter(entry => entry.name !== '.trash')
+      .map(async (entry) => {
       const fullPath = path.join(dirPath, entry.name);
       let size = 0;
       let mtime = null;
@@ -249,6 +251,58 @@ async function getFileInfo(username, relPath) {
   };
 }
 
+// Move an item to trash
+async function moveToTrash(username, relPath) {
+  const db = require('./db');
+  const { v4: uuidv4 } = require('uuid');
+  const srcPath = resolveSafe(username, relPath);
+  const trashRoot = path.join(getUserHome(username), '.trash');
+  await fs.mkdir(trashRoot, { recursive: true });
+  
+  const uuid = uuidv4();
+  const trashPath = path.join(trashRoot, uuid);
+  await fs.rename(srcPath, trashPath);
+  
+  await db.addTrashEntry(uuid, username, relPath, path.posix.join('.trash', uuid));
+}
+
+// Restore an item from trash
+async function restoreFromTrash(username, id) {
+  const db = require('./db');
+  const entry = await db.getTrashEntryById(username, id);
+  if (!entry) throw new Error('Trash entry not found');
+  
+  const srcPath = resolveSafe(username, entry.trashPath);
+  const destPath = resolveSafe(username, entry.originalPath);
+  
+  await fs.mkdir(path.dirname(destPath), { recursive: true });
+  await fs.rename(srcPath, destPath);
+  
+  await db.deleteTrashEntry(username, id);
+}
+
+// Empty the recycle bin recursively
+async function emptyTrash(username) {
+  const db = require('./db');
+  const trashRoot = path.join(getUserHome(username), '.trash');
+  try {
+    await fs.rm(trashRoot, { recursive: true, force: true });
+  } catch (_) {}
+  
+  const entries = await db.getTrashEntries(username);
+  for (const entry of entries) {
+    await db.deleteTrashEntry(username, entry.id);
+  }
+}
+
+// Save/update text content of a file securely
+async function updateFileContent(username, relPath, content) {
+  const filePath = resolveSafe(username, relPath);
+  const stat = await fs.stat(filePath);
+  if (!stat.isFile()) throw new Error('Target is not a file');
+  await fs.writeFile(filePath, content, 'utf-8');
+}
+
 module.exports = {
   ensureUserHome,
   listDirectory,
@@ -265,4 +319,10 @@ module.exports = {
   moveItem,
   searchFiles,
   getFileInfo,
+  
+  // Recycle Bin & Text Editor
+  moveToTrash,
+  restoreFromTrash,
+  emptyTrash,
+  updateFileContent,
 };

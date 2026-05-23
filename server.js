@@ -144,14 +144,70 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
   res.json({ ...safeUser, usedSpace });
 });
 
+// GET /api/analytics/summary
+app.get('/api/analytics/summary', requireAuth, async (req, res) => {
+  try {
+    const username = req.user.username;
+    
+    // Link sharing stats
+    const shares = await db.getSharesByUser(username);
+    const totalShares = shares.length;
+    const totalDownloads = shares.reduce((sum, s) => sum + (s.downloadCount || 0), 0);
+    
+    // Collaboration stats
+    const sharedWithMe = await db.getSharedWithMe(username);
+    const mySharedCollabs = await db.getCollaborators(username);
+    
+    // Recent activity logs
+    const recentLogs = await db.getLogsByUser(username, 15);
+    
+    // Storage
+    const usedSpace = await fm.getUserUsedSpace(username);
+    
+    res.json({
+      storage: {
+        used: usedSpace,
+        quota: req.user.quota,
+        pct: ((usedSpace / req.user.quota) * 100).toFixed(1)
+      },
+      shares: {
+        totalLinks: totalShares,
+        totalDownloads: totalDownloads
+      },
+      collaboration: {
+        sharedWithMe: sharedWithMe.length,
+        sharedWithOthers: mySharedCollabs.length
+      },
+      logs: recentLogs
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── File Routes ─────────────────────────────────────────────────────────────
 
 // GET /api/files/list?path=...
 app.get('/api/files/list', requireAuth, async (req, res) => {
   try {
     const relPath = req.query.path || '';
-    const items = await fm.listDirectory(req.user.username, relPath);
-    res.json({ path: relPath, items });
+    const owner = req.query.owner || req.user.username;
+    
+    let hasReadPermission = false;
+    if (owner === req.user.username) {
+      hasReadPermission = true;
+    } else {
+      const colls = await db.getCollaborators(owner, relPath);
+      const matching = colls.find(c => c.collaborator === req.user.username);
+      if (matching) hasReadPermission = true;
+    }
+    
+    if (!hasReadPermission) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    const items = await fm.listDirectory(owner, relPath);
+    res.json({ path: relPath, owner, items });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -211,8 +267,57 @@ app.post('/api/files/upload', requireAuth, upload.array('files', 50), async (req
 app.get('/api/files/download', requireAuth, async (req, res) => {
   try {
     const relPath = req.query.path || '';
-    await db.addLog({ action: 'download', username: req.user.username, file: relPath });
-    fm.streamFile(req.user.username, relPath, res);
+    const owner = req.query.owner || req.user.username;
+    
+    let hasReadPermission = false;
+    if (owner === req.user.username) {
+      hasReadPermission = true;
+    } else {
+      const colls = await db.getCollaborators(owner, relPath);
+      const matching = colls.find(c => c.collaborator === req.user.username);
+      if (matching) hasReadPermission = true;
+    }
+    
+    if (!hasReadPermission) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    await db.addLog({ action: 'download', username: req.user.username, file: relPath, owner });
+    fm.streamFile(owner, relPath, res);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// PUT /api/files/save
+app.put('/api/files/save', requireAuth, async (req, res) => {
+  try {
+    const { path: relPath, content, owner } = req.body;
+    if (!relPath) return res.status(400).json({ error: 'Path required' });
+    if (content === undefined) return res.status(400).json({ error: 'Content required' });
+    
+    const targetOwner = owner || req.user.username;
+    
+    let hasWritePermission = false;
+    if (targetOwner === req.user.username) {
+      hasWritePermission = true;
+    } else {
+      const colls = await db.getCollaborators(targetOwner, relPath);
+      const matching = colls.find(c => c.collaborator === req.user.username && c.accessLevel === 'write');
+      if (matching) hasWritePermission = true;
+    }
+    
+    if (!hasWritePermission) {
+      return res.status(403).json({ error: 'Access denied: write permission required' });
+    }
+    
+    await fm.updateFileContent(targetOwner, relPath, content);
+    
+    const usedSpace = await fm.getUserUsedSpace(targetOwner);
+    await db.updateUser(targetOwner, { usedSpace });
+    
+    await db.addLog({ action: 'file_edit', username: req.user.username, owner: targetOwner, file: relPath });
+    res.json({ success: true, usedSpace });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -273,6 +378,89 @@ app.delete('/api/files/delete', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/files/trash
+app.post('/api/files/trash', requireAuth, async (req, res) => {
+  try {
+    const { path: relPath } = req.body;
+    if (!relPath) return res.status(400).json({ error: 'Path required' });
+    
+    await fm.moveToTrash(req.user.username, relPath);
+    
+    const usedSpace = await fm.getUserUsedSpace(req.user.username);
+    await db.updateUser(req.user.username, { usedSpace });
+    await db.addLog({ action: 'trash_move', username: req.user.username, file: relPath });
+    
+    res.json({ success: true, usedSpace });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// GET /api/files/trash
+app.get('/api/files/trash', requireAuth, async (req, res) => {
+  try {
+    const entries = await db.getTrashEntries(req.user.username);
+    res.json(entries);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/files/trash/restore
+app.post('/api/files/trash/restore', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (!id) return res.status(400).json({ error: 'ID required' });
+    
+    await fm.restoreFromTrash(req.user.username, id);
+    
+    const usedSpace = await fm.getUserUsedSpace(req.user.username);
+    await db.updateUser(req.user.username, { usedSpace });
+    await db.addLog({ action: 'trash_restore', username: req.user.username, id });
+    
+    res.json({ success: true, usedSpace });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// DELETE /api/files/trash/empty
+app.delete('/api/files/trash/empty', requireAuth, async (req, res) => {
+  try {
+    await fm.emptyTrash(req.user.username);
+    
+    const usedSpace = await fm.getUserUsedSpace(req.user.username);
+    await db.updateUser(req.user.username, { usedSpace });
+    await db.addLog({ action: 'trash_empty', username: req.user.username });
+    
+    res.json({ success: true, usedSpace });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// DELETE /api/files/trash/delete
+app.delete('/api/files/trash/delete', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.body || req.query;
+    if (!id) return res.status(400).json({ error: 'ID required' });
+    
+    const entry = await db.getTrashEntryById(req.user.username, id);
+    if (!entry) return res.status(404).json({ error: 'Trash entry not found' });
+    
+    await fm.deleteItem(req.user.username, entry.trashPath);
+    await db.deleteTrashEntry(req.user.username, id);
+    
+    const usedSpace = await fm.getUserUsedSpace(req.user.username);
+    await db.updateUser(req.user.username, { usedSpace });
+    await db.addLog({ action: 'trash_purge', username: req.user.username, id });
+    
+    res.json({ success: true, usedSpace });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // ─── Share Routes ─────────────────────────────────────────────────────────────
 
 // POST /api/share/create
@@ -322,6 +510,97 @@ app.get('/api/share/list', requireAuth, async (req, res) => {
     const shares = await db.getSharesByUser(req.user.username);
     const safe   = shares.map(({ password: _, absolutePath: __, ...s }) => s);
     res.json(safe);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/share/collaborate
+app.post('/api/share/collaborate', requireAuth, async (req, res) => {
+  try {
+    const { path: relPath, collaborator, accessLevel } = req.body;
+    if (!relPath || !collaborator)
+      return res.status(400).json({ error: 'Path and collaborator required' });
+    
+    if (collaborator === req.user.username)
+      return res.status(400).json({ error: 'Cannot share with yourself' });
+    
+    const collabUser = await db.getUserByUsername(collaborator);
+    if (!collabUser)
+      return res.status(404).json({ error: 'Collaborator user not found' });
+    
+    const cleanAccess = ['read', 'write'].includes(accessLevel) ? accessLevel : 'read';
+    
+    await db.addCollaborator(req.user.username, relPath, collaborator, cleanAccess);
+    await db.addLog({
+      action: 'share_collaborate',
+      username: req.user.username,
+      target: collaborator,
+      file: relPath,
+      accessLevel: cleanAccess
+    });
+    
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/share/collaborators
+app.get('/api/share/collaborators', requireAuth, async (req, res) => {
+  try {
+    const relPath = req.query.path || '';
+    const colls = await db.getCollaborators(req.user.username, relPath);
+    res.json(colls);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/share/collaborate
+app.delete('/api/share/collaborate', requireAuth, async (req, res) => {
+  try {
+    const { path: relPath, collaborator } = req.body || req.query;
+    if (!relPath || !collaborator)
+      return res.status(400).json({ error: 'Path and collaborator required' });
+    
+    await db.removeCollaborator(req.user.username, relPath, collaborator);
+    await db.addLog({
+      action: 'share_collaborate_revoke',
+      username: req.user.username,
+      target: collaborator,
+      file: relPath
+    });
+    
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/share/shared-with-me
+app.get('/api/share/shared-with-me', requireAuth, async (req, res) => {
+  try {
+    const shared = await db.getSharedWithMe(req.user.username);
+    const items = [];
+    for (const s of shared) {
+      try {
+        const info = await fm.getFileInfo(s.owner, s.filePath);
+        items.push({
+          id: s.id,
+          owner: s.owner,
+          path: s.filePath,
+          name: info.name,
+          size: info.size,
+          modified: info.modified,
+          isDirectory: info.isDirectory,
+          accessLevel: s.accessLevel,
+        });
+      } catch (_) {
+        // Skip deleted files
+      }
+    }
+    res.json(items);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
