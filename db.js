@@ -22,7 +22,7 @@ if (isPG) {
   console.log('📂 NexDrop DB Mode: Atomic local JSON database');
 }
 
-const DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const FILES = {
   users: path.join(DATA_DIR, 'users.json'),
   shares: path.join(DATA_DIR, 'shares.json'),
