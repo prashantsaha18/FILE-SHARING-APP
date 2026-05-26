@@ -1,7 +1,8 @@
 /**
  * server.js - NexDrop Main Express Application Server
  * Features: JWT auth, file management, sharing, admin panel,
- *           rate limiting, security headers, real-time search
+ *           rate limiting, security headers, real-time search,
+ *           file locking, NFS/SMB virtual shares, ransomware shield, backups
  */
 require('dotenv').config();
 const express    = require('express');
@@ -41,6 +42,24 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+// ─── Ransomware Shield (Modular Service Broker) ──────────────────────────────
+async function ransomwareShield(req, res, next, fileNames = []) {
+  try {
+    const username = req.user?.username;
+    if (!username) return next();
+
+    const securityService = require('./services/securityService');
+    await securityService.checkThreats(username, fileNames);
+    next();
+  } catch (err) {
+    if (err.message.includes('RANSOMWARE SHIELD')) {
+      const isVelocity = err.message.includes('Rapid writes');
+      return res.status(isVelocity ? 429 : 403).json({ error: err.message });
+    }
+    next(); // Fail open to avoid breaking system on secondary errors
+  }
+}
 
 // ─── File Upload (Memory Storage) ───────────────────────────────────────────
 const upload = multer({
@@ -246,6 +265,12 @@ app.post('/api/files/upload', requireAuth, upload.array('files', 50), async (req
   try {
     const relDir  = req.body.path || '';
     const results = [];
+    const fileNames = req.files.map(f => f.originalname);
+
+    // Ransomware shield check
+    await new Promise((resolve, reject) => {
+      ransomwareShield(req, res, (err) => err ? reject(err) : resolve(), fileNames);
+    });
 
     for (const file of req.files) {
       const saved = await fm.saveUploadedFile(req.user.username, relDir, file);
@@ -772,6 +797,369 @@ app.get('/api/admin/logs', requireAdmin, async (req, res) => {
   }
 });
 
+// ─── File Lock Routes ─────────────────────────────────────────────────────────
+
+// POST /api/files/lock
+app.post('/api/files/lock', requireAuth, async (req, res) => {
+  try {
+    const { path: relPath } = req.body;
+    if (!relPath) return res.status(400).json({ error: 'Path required' });
+    const existing = await db.getFileLock(req.user.username, relPath);
+    if (existing && existing.lockedBy !== req.user.username) {
+      return res.status(423).json({ error: `File is already locked by ${existing.lockedBy}` });
+    }
+    await db.lockFile(req.user.username, relPath, req.user.username);
+    await db.addLog({ action: 'file_lock', username: req.user.username, file: relPath });
+    res.json({ success: true, lockedBy: req.user.username });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/files/unlock
+app.post('/api/files/unlock', requireAuth, async (req, res) => {
+  try {
+    const { path: relPath } = req.body;
+    if (!relPath) return res.status(400).json({ error: 'Path required' });
+    const lock = await db.getFileLock(req.user.username, relPath);
+    if (!lock) return res.status(404).json({ error: 'File is not locked' });
+    if (lock.lockedBy !== req.user.username && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Cannot unlock a file locked by another user' });
+    }
+    await db.unlockFile(req.user.username, relPath);
+    await db.addLog({ action: 'file_unlock', username: req.user.username, file: relPath });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── NFS Export Routes ────────────────────────────────────────────────────────
+
+// GET /api/nfs/exports
+app.get('/api/nfs/exports', requireAuth, async (req, res) => {
+  try {
+    const exports = await db.getNFSExports(req.user.username);
+    res.json(exports);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/nfs/exports
+app.post('/api/nfs/exports', requireAuth, async (req, res) => {
+  try {
+    const { filePath, allowedIPs, accessLevel, squash } = req.body;
+    if (!filePath) return res.status(400).json({ error: 'filePath required' });
+    const entry = await db.createNFSExport({
+      owner: req.user.username,
+      filePath,
+      allowedIPs: allowedIPs || '*',
+      accessLevel: ['ro', 'rw'].includes(accessLevel) ? accessLevel : 'ro',
+      squash: squash || 'root_squash',
+      active: true,
+    });
+    await db.addLog({ action: 'nfs_export_create', username: req.user.username, filePath });
+    res.status(201).json(entry);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/nfs/exports/:id
+app.put('/api/nfs/exports/:id', requireAuth, async (req, res) => {
+  try {
+    const { allowedIPs, accessLevel, squash, active } = req.body;
+    const updates = {};
+    if (allowedIPs !== undefined) updates.allowedIPs = allowedIPs;
+    if (accessLevel !== undefined) updates.accessLevel = accessLevel;
+    if (squash !== undefined) updates.squash = squash;
+    if (active !== undefined) updates.active = active;
+    await db.updateNFSExport(req.params.id, updates);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/nfs/exports/:id
+app.delete('/api/nfs/exports/:id', requireAuth, async (req, res) => {
+  try {
+    await db.deleteNFSExport(req.params.id);
+    await db.addLog({ action: 'nfs_export_delete', username: req.user.username, id: req.params.id });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── SMB Share Routes ─────────────────────────────────────────────────────────
+
+// GET /api/smb/shares
+app.get('/api/smb/shares', requireAuth, async (req, res) => {
+  try {
+    const shares = await db.getSMBShares(req.user.username);
+    res.json(shares);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/smb/shares
+app.post('/api/smb/shares', requireAuth, async (req, res) => {
+  try {
+    const { shareName, filePath, comment, guestOk, accessLevel } = req.body;
+    if (!shareName || !filePath) return res.status(400).json({ error: 'shareName and filePath required' });
+    // Validate shareName (alphanumeric + underscores, max 40 chars)
+    if (!/^[a-zA-Z0-9_\-]{1,40}$/.test(shareName)) {
+      return res.status(400).json({ error: 'Share name must be 1-40 alphanumeric characters' });
+    }
+    const entry = await db.createSMBShare({
+      owner: req.user.username,
+      shareName,
+      filePath,
+      comment: comment || '',
+      guestOk: guestOk === true,
+      accessLevel: ['ro', 'rw'].includes(accessLevel) ? accessLevel : 'ro',
+      active: true,
+    });
+    await db.addLog({ action: 'smb_share_create', username: req.user.username, shareName, filePath });
+    res.status(201).json(entry);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/smb/shares/:id
+app.put('/api/smb/shares/:id', requireAuth, async (req, res) => {
+  try {
+    const { comment, guestOk, accessLevel, active } = req.body;
+    const updates = {};
+    if (comment !== undefined) updates.comment = comment;
+    if (guestOk !== undefined) updates.guestOk = guestOk;
+    if (accessLevel !== undefined) updates.accessLevel = accessLevel;
+    if (active !== undefined) updates.active = active;
+    await db.updateSMBShare(req.params.id, updates);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/smb/shares/:id
+app.delete('/api/smb/shares/:id', requireAuth, async (req, res) => {
+  try {
+    await db.deleteSMBShare(req.params.id);
+    await db.addLog({ action: 'smb_share_delete', username: req.user.username, id: req.params.id });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Admin Backup Routes ──────────────────────────────────────────────────────
+
+// GET /api/admin/backups
+app.get('/api/admin/backups', requireAdmin, async (req, res) => {
+  try {
+    const backups = await fm.listBackups();
+    res.json(backups);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/backups/create
+app.post('/api/admin/backups/create', requireAdmin, async (req, res) => {
+  try {
+    const result = await fm.createBackup();
+    await db.addLog({ action: 'backup_create', username: req.user.username, backup: result.name });
+    res.json(result);
+  } catch (err) {
+    console.error('Backup error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/backups/download/:filename
+app.get('/api/admin/backups/download/:filename', requireAdmin, async (req, res) => {
+  try {
+    const safeName = path.basename(req.params.filename);
+    if (!safeName.endsWith('.zip') || !safeName.startsWith('nexdrop-backup-')) {
+      return res.status(400).json({ error: 'Invalid backup filename' });
+    }
+    const fullPath = path.join(fm.BACKUPS_DIR, safeName);
+    await db.addLog({ action: 'backup_download', username: req.user.username, backup: safeName });
+    res.download(fullPath, safeName);
+  } catch (err) {
+    res.status(404).json({ error: 'Backup not found' });
+  }
+});
+
+// DELETE /api/admin/backups/delete
+app.delete('/api/admin/backups/delete', requireAdmin, async (req, res) => {
+  try {
+    const { filename } = req.body;
+    if (!filename) return res.status(400).json({ error: 'filename required' });
+    await fm.deleteBackup(filename);
+    await db.addLog({ action: 'backup_delete', username: req.user.username, backup: filename });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ─── Security Audit & Settings Routes ────────────────────────────────────────
+
+// GET /api/admin/security/audit
+app.get('/api/admin/security/audit', requireAdmin, async (req, res) => {
+  try {
+    const jwtSecret = process.env.JWT_SECRET || '';
+    const users = await db.getUsers();
+    const quarantined = users.filter(u => u.status === 'suspended').length;
+    const shieldEnabled = await db.getSystemSetting('ransomwareShield', true);
+    const backups = await fm.listBackups();
+    const lastBackup = backups.length ? backups[0].createdAt : null;
+
+    // Calculate security score (0-100)
+    let score = 0;
+    const checks = [
+      { id: 'helmet',        label: 'Security Headers (Helmet.js)',       pass: true,                           weight: 15 },
+      { id: 'rateLimit',     label: 'Rate Limiting Enabled',              pass: true,                           weight: 15 },
+      { id: 'jwtStrength',   label: 'JWT Secret Strength (≥32 chars)',    pass: jwtSecret.length >= 32,         weight: 20 },
+      { id: 'shield',        label: 'Ransomware Shield Active',           pass: !!shieldEnabled,                weight: 20 },
+      { id: 'backup',        label: 'Recent Backup (<7 days)',            pass: lastBackup && (Date.now() - new Date(lastBackup)) < 7 * 86400000, weight: 15 },
+      { id: 'quarantine',    label: 'No Quarantined Accounts',           pass: quarantined === 0,              weight: 15 },
+    ];
+
+    for (const c of checks) {
+      if (c.pass) score += c.weight;
+    }
+
+    res.json({
+      score,
+      checks: checks.map(c => ({ id: c.id, label: c.label, pass: c.pass, weight: c.weight })),
+      quarantined,
+      shieldEnabled,
+      lastBackup,
+      totalBackups: backups.length,
+      platform: os.platform(),
+      uptime: os.uptime(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/security/settings
+app.get('/api/admin/security/settings', requireAdmin, async (req, res) => {
+  try {
+    const shieldEnabled = await db.getSystemSetting('ransomwareShield', true);
+    res.json({ ransomwareShield: shieldEnabled });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/security/settings
+app.post('/api/admin/security/settings', requireAdmin, async (req, res) => {
+  try {
+    const { ransomwareShield } = req.body;
+    if (ransomwareShield !== undefined) {
+      await db.updateSystemSetting('ransomwareShield', !!ransomwareShield);
+    }
+    await db.addLog({ action: 'security_settings_update', username: req.user.username, ransomwareShield });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/security/rules
+app.get('/api/admin/security/rules', requireAdmin, async (req, res) => {
+  try {
+    const securityService = require('./services/securityService');
+    const velocity = await db.getSystemSetting('ransomwareVelocity', 15);
+    const window = await db.getSystemSetting('ransomwareWindow', 10);
+    const exts = await db.getSystemSetting('ransomwareExts', securityService.DEFAULT_RANSOM_EXTS);
+    res.json({ velocity, window, exts });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/security/rules
+app.post('/api/admin/security/rules', requireAdmin, async (req, res) => {
+  try {
+    const { velocity, window, exts } = req.body;
+    if (velocity !== undefined) await db.updateSystemSetting('ransomwareVelocity', parseInt(velocity));
+    if (window !== undefined) await db.updateSystemSetting('ransomwareWindow', parseInt(window));
+    if (exts !== undefined) {
+      const parsedExts = Array.isArray(exts) ? exts : exts.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+      await db.updateSystemSetting('ransomwareExts', parsedExts);
+    }
+    await db.addLog({ action: 'security_rules_update', username: req.user.username });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/backups/settings
+app.get('/api/admin/backups/settings', requireAdmin, async (req, res) => {
+  try {
+    const interval = await db.getSystemSetting('backupIntervalHours', 0);
+    const retention = await db.getSystemSetting('backupRetentionCount', 5);
+    res.json({ interval, retention });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/backups/settings
+app.post('/api/admin/backups/settings', requireAdmin, async (req, res) => {
+  try {
+    const { interval, retention } = req.body;
+    const securityService = require('./services/securityService');
+    if (interval !== undefined) {
+      await db.updateSystemSetting('backupIntervalHours', parseFloat(interval));
+      await securityService.initScheduler(); // Reload scheduler
+    }
+    if (retention !== undefined) {
+      await db.updateSystemSetting('backupRetentionCount', parseInt(retention));
+    }
+    await db.addLog({ action: 'backup_settings_update', username: req.user.username, interval, retention });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/protocols/deploy-configs
+app.get('/api/admin/protocols/deploy-configs', requireAdmin, async (req, res) => {
+  try {
+    const protocolService = require('./services/protocolService');
+    const nfs = await protocolService.generateNFSExports();
+    const smb = await protocolService.generateSMBConfig();
+    const script = await protocolService.generateSyncScript();
+    res.json({ nfs, smb, script });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/security/release-quarantine/:username
+app.post('/api/admin/security/release-quarantine/:username', requireAdmin, async (req, res) => {
+  try {
+    await db.updateUser(req.params.username, { status: 'active' });
+    await db.unlockAllByUser(req.params.username);
+    await db.addLog({ action: 'quarantine_release', by: req.user.username, target: req.params.username });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // ─── Share Page & SPA catch-all ───────────────────────────────────────────────
 app.get('/share/:token', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -785,6 +1173,14 @@ app.get('*', (req, res) => {
 async function start() {
   await db.init();
   await fm.ensureUserHome('admin');
+
+  // Initialize scheduled backups runner daemon
+  try {
+    const securityService = require('./services/securityService');
+    await securityService.initScheduler();
+  } catch (err) {
+    console.error('Failed to initialize backups scheduler:', err);
+  }
 
   app.listen(PORT, () => {
     console.log(`\n┌─────────────────────────────────────────┐`);

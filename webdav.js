@@ -12,6 +12,18 @@ const { v4: uuidv4 } = require('uuid');
 
 const db = require('./db');
 const fm = require('./fileManager');
+const securityService = require('./services/securityService');
+
+// Helper to check WebDAV write locks
+async function checkWebDAVLock(username, relPath) {
+  try {
+    const lock = await db.getFileLock(username, relPath);
+    if (lock && lock.lockedBy !== username) {
+      return lock; // locked by someone else
+    }
+  } catch (_) {}
+  return null;
+}
 
 // ─── HTTP Basic Authentication Middleware ────────────────────────────────────
 async function webdavAuth(req, res, next) {
@@ -167,7 +179,20 @@ router.put('*', async (req, res) => {
   if (relPath.startsWith('/')) relPath = relPath.substring(1);
 
   try {
-    const absPath = fm.getAbsolutePath(username, relPath);
+    // Check if file is locked by another user
+    const lock = await checkWebDAVLock(username, relPath);
+    if (lock) {
+      return res.status(423).send(`Locked: File is locked by ${lock.lockedBy}`);
+    }
+
+// Ransomware threat detection
+try {
+  await securityService.checkThreats(username, [relPath]);
+} catch (err) {
+  return res.status(403).send(err.message);
+}
+
+const absPath = fm.getAbsolutePath(username, relPath);
     
     // Ensure the parent directory exists
     await fs.mkdir(path.dirname(absPath), { recursive: true });
@@ -228,6 +253,12 @@ router.delete('*', async (req, res) => {
   if (relPath.startsWith('/')) relPath = relPath.substring(1);
 
   try {
+    // Check if file is locked by another user
+    const lock = await checkWebDAVLock(username, relPath);
+    if (lock) {
+      return res.status(423).send(`Locked: File is locked by ${lock.lockedBy}`);
+    }
+
     await fm.deleteItem(username, relPath);
     const usedSpace = await fm.getUserUsedSpace(username);
     await db.updateUser(username, { usedSpace });
@@ -313,6 +344,12 @@ router.all('*', async (req, res, next) => {
         destPath = destPath.substring(7);
       }
       if (destPath.startsWith('/')) destPath = destPath.substring(1);
+
+      // Check if source is locked by another user
+      const lock = await checkWebDAVLock(username, relPath);
+      if (lock) {
+        return res.status(423).send(`Locked: File is locked by ${lock.lockedBy}`);
+      }
 
       const srcAbs = fm.getAbsolutePath(username, relPath);
       const destAbs = fm.getAbsolutePath(username, destPath);

@@ -288,6 +288,8 @@ function switchView(view, e) {
   if (view === 'trash')  loadTrash();
   if (view === 'analytics') refreshAnalytics();
   if (view === 'admin')  refreshAdmin();
+  if (view === 'webdav') loadProtocolsView();
+  if (view === 'backups') refreshBackupsView();
   lucide.createIcons();
 }
 
@@ -337,11 +339,16 @@ function renderFileCard(f, i, isSearch = false) {
     ? `<div class="search-path-hint">📁 /${f.path.split('/').slice(0,-1).join('/')}/</div>` 
     : '';
 
+  const lockBadge = f.lock
+    ? `<span class="lock-badge"><i data-lucide="lock"></i> ${escapeHtml(f.lock.lockedBy)}</span>`
+    : '';
+
   if (state.viewMode === 'grid') {
     return `
       <div class="file-card" data-idx="${i}"
         onclick="fileClick(${i})"
         oncontextmenu="showCtxMenu(event, ${i})">
+        ${lockBadge}
         <span class="file-icon">${fileIcon(f.name, f.isDirectory)}</span>
         <span class="file-name">${escapeHtml(f.name)}</span>
         <span class="file-meta">${f.isDirectory ? 'Folder' : formatBytes(f.size)}</span>
@@ -354,10 +361,11 @@ function renderFileCard(f, i, isSearch = false) {
         oncontextmenu="showCtxMenu(event, ${i})">
         <span class="file-icon">${fileIcon(f.name, f.isDirectory)}</span>
         <div class="file-info">
-          <div class="file-name">${escapeHtml(f.name)}</div>
+          <div class="file-name">${escapeHtml(f.name)}${f.lock ? ` <span style="color:var(--amber);font-size:.75em;">🔒</span>` : ''}</div>
           <div class="file-meta">
             <span>${f.isDirectory ? 'Folder' : formatBytes(f.size)}</span>
             ${f.modified ? `<span>${timeAgo(f.modified)}</span>` : ''}
+            ${f.lock ? `<span style="color:var(--amber);">Locked by ${escapeHtml(f.lock.lockedBy)}</span>` : ''}
             ${isSearch && f.path.includes('/') ? `<span>📁 /${f.path.split('/').slice(0,-1).join('/')}/</span>` : ''}
           </div>
         </div>
@@ -932,6 +940,15 @@ function showCtxMenu(e, idx) {
     el('ctx-move').style.display     = '';
     el('ctx-div-2').style.display = '';
     el('ctx-delete').style.display   = '';
+
+    // Lock / unlock items (files only, not shared view)
+    if (el('ctx-lock')) {
+      const isLocked = f.lock && f.lock.lockedBy === state.user?.username;
+      const isLockedByOther = f.lock && f.lock.lockedBy !== state.user?.username;
+      el('ctx-lock').style.display   = isFile && !f.lock ? '' : 'none';
+      el('ctx-unlock').style.display = isFile && isLocked ? '' : 'none';
+      el('ctx-div-lock').style.display = isFile ? '' : 'none';
+    }
     
     el('ctx-restore').style.display = 'none';
     el('ctx-purge').style.display   = 'none';
@@ -1636,3 +1653,485 @@ function switchMountInstructions(os) {
 
 // ─── Start ────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', initApp);
+
+// ═══════════════════════════════════════════════════════════
+// FILE LOCK CONTROLLERS
+// ═══════════════════════════════════════════════════════════
+
+async function ctxLockFile() {
+  const f = state.ctxTarget;
+  if (!f) return;
+  try {
+    const res = await apiFetch('/files/lock', { method: 'POST', body: JSON.stringify({ path: f.path }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    toast(`🔒 File locked: ${f.name}`, 'success');
+    loadFiles(state.currentPath);
+  } catch (err) {
+    toast('Lock failed: ' + err.message, 'error');
+  }
+}
+
+async function ctxUnlockFile() {
+  const f = state.ctxTarget;
+  if (!f) return;
+  try {
+    const res = await apiFetch('/files/unlock', { method: 'POST', body: JSON.stringify({ path: f.path }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    toast(`🔓 File unlocked: ${f.name}`, 'success');
+    loadFiles(state.currentPath);
+  } catch (err) {
+    toast('Unlock failed: ' + err.message, 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// PROTOCOL TABS CONTROLLER
+// ═══════════════════════════════════════════════════════════
+
+async function loadProtocolsView() {
+  // Refresh SMB and NFS data when switching to File Protocols view
+  await Promise.all([loadSMBShares(), loadNFSExports(), loadHostConfigs()]);
+}
+
+function switchProtocolTab(tab) {
+  ['webdav', 'smb', 'nfs'].forEach(t => {
+    const btn = el(`ptab-${t}`);
+    const panel = el(`proto-panel-${t}`);
+    if (btn) btn.classList.toggle('active', t === tab);
+    if (panel) panel.classList.toggle('hidden', t !== tab);
+  });
+  lucide.createIcons();
+}
+
+// ═══════════════════════════════════════════════════════════
+// SMB SHARES CONTROLLER
+// ═══════════════════════════════════════════════════════════
+
+async function loadSMBShares() {
+  try {
+    const res = await apiFetch('/smb/shares');
+    const shares = await res.json();
+    renderSMBShares(shares);
+  } catch (err) {
+    console.error('SMB load error:', err);
+  }
+}
+
+function renderSMBShares(shares) {
+  const list = el('smb-list');
+  if (!list) return;
+  if (!shares.length) {
+    list.innerHTML = `<div class="proto-list-empty"><i data-lucide="monitor"></i><p>No SMB shares configured yet</p></div>`;
+    lucide.createIcons();
+    return;
+  }
+  list.innerHTML = shares.map(s => `
+    <div class="proto-item">
+      <div class="proto-item-icon"><i data-lucide="monitor"></i></div>
+      <div class="proto-item-info">
+        <div class="proto-item-name">\\\\server\\${escapeHtml(s.shareName)}</div>
+        <div class="proto-item-meta">
+          <span>Path: <code>${escapeHtml(s.filePath)}</code></span>
+          <span class="proto-badge ${s.accessLevel === 'rw' ? 'badge-green' : 'badge-blue'}">${s.accessLevel.toUpperCase()}</span>
+          ${s.guestOk ? '<span class="proto-badge badge-amber">Guest OK</span>' : ''}
+          ${s.comment ? `<span>${escapeHtml(s.comment)}</span>` : ''}
+          <span class="proto-badge ${s.active ? 'badge-green' : 'badge-red'}">${s.active ? 'Active' : 'Disabled'}</span>
+        </div>
+      </div>
+      <div class="proto-item-actions">
+        <button class="btn-icon" title="${s.active ? 'Disable' : 'Enable'}" onclick="toggleSMBShare('${s.id}', ${!s.active})"
+          style="color: ${s.active ? 'var(--green)' : 'var(--text-muted)'};">
+          <i data-lucide="${s.active ? 'toggle-right' : 'toggle-left'}"></i>
+        </button>
+        <button class="btn-icon" title="Delete" onclick="deleteSMBShare('${s.id}')" style="color:var(--red);">
+          <i data-lucide="trash-2"></i>
+        </button>
+      </div>
+    </div>
+  `).join('');
+  lucide.createIcons();
+}
+
+async function createSMBShare() {
+  const path = el('smb-path')?.value.trim();
+  const name = el('smb-name')?.value.trim();
+  const comment = el('smb-comment')?.value.trim();
+  const access = el('smb-access')?.value;
+  const guest = el('smb-guest')?.checked;
+
+  if (!path || !name) { toast('Share name and path required', 'error'); return; }
+
+  try {
+    const res = await apiFetch('/smb/shares', {
+      method: 'POST',
+      body: JSON.stringify({ filePath: path, shareName: name, comment, accessLevel: access, guestOk: guest }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    toast('✓ SMB share created', 'success');
+    el('smb-path').value = ''; el('smb-name').value = ''; el('smb-comment').value = '';
+    await loadSMBShares();
+  } catch (err) {
+    toast('Error: ' + err.message, 'error');
+  }
+}
+
+async function toggleSMBShare(id, active) {
+  try {
+    const res = await apiFetch(`/smb/shares/${id}`, { method: 'PUT', body: JSON.stringify({ active }) });
+    if (!res.ok) throw new Error((await res.json()).error);
+    await loadSMBShares();
+  } catch (err) {
+    toast('Error: ' + err.message, 'error');
+  }
+}
+
+async function deleteSMBShare(id) {
+  if (!confirm('Delete this SMB share?')) return;
+  try {
+    const res = await apiFetch(`/smb/shares/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error((await res.json()).error);
+    toast('SMB share deleted', 'success');
+    await loadSMBShares();
+  } catch (err) {
+    toast('Error: ' + err.message, 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// NFS EXPORTS CONTROLLER
+// ═══════════════════════════════════════════════════════════
+
+async function loadNFSExports() {
+  try {
+    const res = await apiFetch('/nfs/exports');
+    const exports = await res.json();
+    renderNFSExports(exports);
+  } catch (err) {
+    console.error('NFS load error:', err);
+  }
+}
+
+function renderNFSExports(exports) {
+  const list = el('nfs-list');
+  const fileView = el('nfs-exports-file');
+  const countBadge = el('nfs-export-count');
+
+  if (countBadge) countBadge.textContent = `${exports.length} export${exports.length !== 1 ? 's' : ''}`;
+
+  // Render /etc/exports-style file
+  if (fileView) {
+    if (!exports.length) {
+      fileView.textContent = '# No exports configured';
+    } else {
+      fileView.textContent = exports.map(e =>
+        `${escapeHtml(e.filePath)}   ${escapeHtml(e.allowedIPs)}(${e.accessLevel},${e.squash},no_subtree_check)`
+      ).join('\n');
+    }
+  }
+
+  if (!list) return;
+  if (!exports.length) {
+    list.innerHTML = `<div class="proto-list-empty"><i data-lucide="server"></i><p>No NFS exports configured yet</p></div>`;
+    lucide.createIcons();
+    return;
+  }
+
+  list.innerHTML = exports.map(e => `
+    <div class="proto-item">
+      <div class="proto-item-icon"><i data-lucide="server"></i></div>
+      <div class="proto-item-info">
+        <div class="proto-item-name"><code>${escapeHtml(e.filePath)}</code></div>
+        <div class="proto-item-meta">
+          <span>IPs: <code>${escapeHtml(e.allowedIPs)}</code></span>
+          <span class="proto-badge ${e.accessLevel === 'rw' ? 'badge-green' : 'badge-blue'}">${e.accessLevel.toUpperCase()}</span>
+          <span class="proto-badge badge-purple">${escapeHtml(e.squash)}</span>
+          <span class="proto-badge ${e.active ? 'badge-green' : 'badge-red'}">${e.active ? 'Active' : 'Disabled'}</span>
+        </div>
+      </div>
+      <div class="proto-item-actions">
+        <button class="btn-icon" title="${e.active ? 'Disable' : 'Enable'}" onclick="toggleNFSExport('${e.id}', ${!e.active})"
+          style="color: ${e.active ? 'var(--green)' : 'var(--text-muted)'};">
+          <i data-lucide="${e.active ? 'toggle-right' : 'toggle-left'}"></i>
+        </button>
+        <button class="btn-icon" title="Delete" onclick="deleteNFSExport('${e.id}')" style="color:var(--red);">
+          <i data-lucide="trash-2"></i>
+        </button>
+      </div>
+    </div>
+  `).join('');
+  lucide.createIcons();
+}
+
+async function createNFSExport() {
+  const path = el('nfs-path')?.value.trim();
+  const ips = el('nfs-ips')?.value.trim();
+  const access = el('nfs-access')?.value;
+  const squash = el('nfs-squash')?.value;
+
+  if (!path) { toast('Export path required', 'error'); return; }
+
+  try {
+    const res = await apiFetch('/nfs/exports', {
+      method: 'POST',
+      body: JSON.stringify({ filePath: path, allowedIPs: ips || '*', accessLevel: access, squash }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    toast('✓ NFS export created', 'success');
+    el('nfs-path').value = ''; el('nfs-ips').value = '';
+    await loadNFSExports();
+  } catch (err) {
+    toast('Error: ' + err.message, 'error');
+  }
+}
+
+async function toggleNFSExport(id, active) {
+  try {
+    const res = await apiFetch(`/nfs/exports/${id}`, { method: 'PUT', body: JSON.stringify({ active }) });
+    if (!res.ok) throw new Error((await res.json()).error);
+    await loadNFSExports();
+  } catch (err) {
+    toast('Error: ' + err.message, 'error');
+  }
+}
+
+async function deleteNFSExport(id) {
+  if (!confirm('Delete this NFS export?')) return;
+  try {
+    const res = await apiFetch(`/nfs/exports/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error((await res.json()).error);
+    toast('NFS export deleted', 'success');
+    await loadNFSExports();
+  } catch (err) {
+    toast('Error: ' + err.message, 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// BACKUPS & SECURITY DASHBOARD CONTROLLER
+// ═══════════════════════════════════════════════════════════
+
+function formatUptime(seconds) {
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h uptime`;
+  if (h > 0) return `${h}h ${m}m uptime`;
+  return `${m}m uptime`;
+}
+
+async function refreshBackupsView() {
+  await Promise.all([loadSecurityAudit(), loadBackupsList()]);
+}
+
+async function loadSecurityAudit() {
+  try {
+    const res = await apiFetch('/admin/security/audit');
+    if (!res.ok) return;
+    const data = await res.json();
+
+    // Fetch customized rules and backup settings to populate input fields
+    try {
+      const rRes = await apiFetch('/admin/security/rules');
+      if (rRes.ok) {
+        const rData = await rRes.json();
+        const velInput = el('sec-rule-velocity');
+        const winInput = el('sec-rule-window');
+        const extsInput = el('sec-rule-exts');
+        if (velInput) velInput.value = rData.velocity;
+        if (winInput) winInput.value = rData.window;
+        if (extsInput) extsInput.value = Array.isArray(rData.exts) ? rData.exts.join(', ') : rData.exts;
+      }
+      
+      const bRes = await apiFetch('/admin/backups/settings');
+      if (bRes.ok) {
+        const bData = await bRes.json();
+        const intInput = el('backup-auto-interval');
+        const retInput = el('backup-auto-retention');
+        if (intInput) intInput.value = bData.interval;
+        if (retInput) retInput.value = bData.retention;
+      }
+    } catch (_) {}
+
+    // Score ring animation
+    const ring = el('score-ring-fill');
+    const numEl = el('sec-score-number');
+    const titleEl = el('sec-score-title');
+    const descEl = el('sec-score-desc');
+    const platformEl = el('sec-platform');
+    const uptimeEl = el('sec-uptime');
+
+    if (numEl) numEl.textContent = data.score;
+    if (ring) {
+      const circumference = 326.73;
+      const offset = circumference - (data.score / 100) * circumference;
+      ring.style.strokeDashoffset = offset;
+      // Color the ring based on score
+      ring.style.stroke = data.score >= 80 ? 'var(--green)' : data.score >= 50 ? 'var(--amber)' : 'var(--red)';
+    }
+    if (numEl) numEl.style.color = data.score >= 80 ? 'var(--green)' : data.score >= 50 ? 'var(--amber)' : 'var(--red)';
+    if (titleEl) titleEl.textContent = data.score >= 80 ? '✅ Security Score' : data.score >= 50 ? '⚠️ Security Score' : '🚨 Security Score';
+    if (descEl) descEl.textContent = data.score >= 80 ? 'Your server has a strong security posture.' : data.score >= 50 ? 'Some security improvements are recommended.' : 'Critical security issues detected. Immediate action required.';
+    if (platformEl) platformEl.innerHTML = `<i data-lucide="server"></i> ${data.platform}`;
+    if (uptimeEl) uptimeEl.innerHTML = `<i data-lucide="clock"></i> ${formatUptime(data.uptime)}`;
+
+    // Security checklist
+    const checklist = el('security-checklist');
+    if (checklist) {
+      checklist.innerHTML = data.checks.map(c => `
+        <div class="audit-check">
+          <span class="audit-icon ${c.pass ? 'pass' : 'fail'}">
+            <i data-lucide="${c.pass ? 'check-circle' : 'x-circle'}"></i>
+          </span>
+          <span class="audit-label">${escapeHtml(c.label)}</span>
+          <span class="audit-weight">+${c.weight}pts</span>
+        </div>
+      `).join('');
+    }
+
+    // Ransomware shield status
+    const shieldToggle = el('shield-toggle');
+    const shieldText = el('shield-status-text');
+    const shieldWrap = el('shield-icon-wrap');
+    if (shieldToggle) shieldToggle.checked = data.shieldEnabled;
+    if (shieldText) shieldText.textContent = data.shieldEnabled ? '🛡️ ACTIVE — Monitoring in real-time' : '⚠️ DISABLED — Ransomware protection is off';
+    if (shieldWrap) shieldWrap.classList.toggle('danger', !data.shieldEnabled);
+
+    // Quarantine console
+    const quarantineCount = el('quarantine-count');
+    if (quarantineCount) quarantineCount.textContent = `${data.quarantined} quarantined`;
+
+    const quarantineList = el('quarantine-list');
+    if (quarantineList) {
+      if (!data.quarantined) {
+        quarantineList.innerHTML = `<div class="proto-list-empty" style="border-style:solid;"><i data-lucide="shield-check"></i><p>No quarantined accounts — all clear!</p></div>`;
+      } else {
+        // Fetch full user list to show quarantine details
+        try {
+          const uRes = await apiFetch('/admin/users');
+          const uData = await uRes.json();
+          const suspended = (uData.users || []).filter(u => u.status === 'suspended');
+          quarantineList.innerHTML = suspended.map(u => `
+            <div class="quarantine-row">
+              <div class="user-avatar" style="flex-shrink:0;">${u.username[0].toUpperCase()}</div>
+              <div class="quarantine-row-info">
+                <div class="quarantine-row-name">${escapeHtml(u.username)}</div>
+                <div class="quarantine-row-reason">Account suspended by Ransomware Shield</div>
+              </div>
+              <button class="btn btn-ghost" onclick="releaseQuarantine('${escapeHtml(u.username)}')">
+                <i data-lucide="unlock"></i> Release
+              </button>
+            </div>
+          `).join('');
+        } catch (_) {}
+      }
+    }
+
+    lucide.createIcons();
+  } catch (err) {
+    console.error('Security audit error:', err);
+  }
+}
+
+async function toggleRansomwareShield(enabled) {
+  try {
+    const res = await apiFetch('/admin/security/settings', {
+      method: 'POST',
+      body: JSON.stringify({ ransomwareShield: enabled }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error);
+    toast(enabled ? '🛡️ Ransomware Shield ENABLED' : '⚠️ Ransomware Shield disabled', enabled ? 'success' : 'warning');
+    await loadSecurityAudit();
+  } catch (err) {
+    toast('Error: ' + err.message, 'error');
+  }
+}
+
+async function releaseQuarantine(username) {
+  if (!confirm(`Release quarantine for "${username}"? Their account will be reactivated.`)) return;
+  try {
+    const res = await apiFetch(`/admin/security/release-quarantine/${encodeURIComponent(username)}`, { method: 'POST' });
+    if (!res.ok) throw new Error((await res.json()).error);
+    toast(`✓ ${username} released from quarantine`, 'success');
+    await loadSecurityAudit();
+  } catch (err) {
+    toast('Error: ' + err.message, 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// BACKUP MANAGEMENT CONTROLLER
+// ═══════════════════════════════════════════════════════════
+
+async function loadBackupsList() {
+  const list = el('backups-list');
+  if (!list) return;
+  try {
+    const res = await apiFetch('/admin/backups');
+    const backups = await res.json();
+    if (!backups.length) {
+      list.innerHTML = `<div class="proto-list-empty"><i data-lucide="hard-drive"></i><p>No backups yet. Create your first backup now.</p></div>`;
+      lucide.createIcons();
+      return;
+    }
+    list.innerHTML = backups.map(b => `
+      <div class="backup-row">
+        <div class="backup-icon"><i data-lucide="archive"></i></div>
+        <div class="backup-info">
+          <div class="backup-name">${escapeHtml(b.name)}</div>
+          <div class="backup-meta">${formatBytes(b.size)} &bull; Created ${timeAgo(b.createdAt)}</div>
+        </div>
+        <div class="backup-actions">
+          <a href="/api/admin/backups/download/${encodeURIComponent(b.name)}"
+            class="btn btn-ghost" style="font-size:.8rem;padding:.4rem .8rem;"
+            download title="Download backup">
+            <i data-lucide="download"></i>
+          </a>
+          <button class="btn btn-danger" style="font-size:.8rem;padding:.4rem .8rem;"
+            onclick="deleteSystemBackup('${escapeHtml(b.name)}')" title="Delete backup">
+            <i data-lucide="trash-2"></i>
+          </button>
+        </div>
+      </div>
+    `).join('');
+    lucide.createIcons();
+  } catch (err) {
+    list.innerHTML = `<div class="proto-list-empty"><i data-lucide="alert-triangle"></i><p>Failed to load backups</p></div>`;
+    lucide.createIcons();
+  }
+}
+
+async function createSystemBackup() {
+  const btn = el('create-backup-btn');
+  if (btn) { btn.classList.add('loading'); btn.textContent = 'Creating backup…'; }
+  try {
+    const res = await apiFetch('/admin/backups/create', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    toast(`✓ Backup created: ${data.name} (${formatBytes(data.size)})`, 'success');
+    await loadBackupsList();
+    await loadSecurityAudit();
+  } catch (err) {
+    toast('Backup failed: ' + err.message, 'error');
+  } finally {
+    if (btn) { btn.classList.remove('loading'); btn.innerHTML = '<i data-lucide="download-cloud"></i> Create Backup Now'; lucide.createIcons(); }
+  }
+}
+
+async function deleteSystemBackup(filename) {
+  if (!confirm(`Delete backup "${filename}"? This cannot be undone.`)) return;
+  try {
+    const res = await apiFetch('/admin/backups/delete', {
+      method: 'DELETE',
+      body: JSON.stringify({ filename }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error);
+    toast('Backup deleted', 'success');
+    await loadBackupsList();
+  } catch (err) {
+    toast('Error: ' + err.message, 'error');
+  }
+}

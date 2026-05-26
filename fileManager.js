@@ -5,10 +5,14 @@
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const path = require('path');
+const archiver = require('archiver');
 
 const STORAGE_ROOT = process.env.STORAGE_DIR || (process.env.VERCEL
   ? path.join('/tmp', 'storage', 'users')
   : path.join(__dirname, 'storage', 'users'));
+
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const BACKUPS_DIR = path.join(__dirname, 'backups');
 
 // Get user's home directory (creates if missing)
 function getUserHome(username) {
@@ -34,10 +38,18 @@ async function ensureUserHome(username) {
   return home;
 }
 
-// List contents of a directory
+// List contents of a directory (with file lock metadata injected)
 async function listDirectory(username, relPath = '') {
+  const db = require('./db');
   const dirPath = resolveSafe(username, relPath);
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+  // Pre-fetch locks for this user (to avoid N+1 DB calls)
+  let locksMap = {};
+  try {
+    const locks = await db.getFileLocks(username);
+    for (const lk of locks) locksMap[lk.filePath] = lk;
+  } catch (_) {}
 
   const results = await Promise.all(
     entries
@@ -57,13 +69,17 @@ async function listDirectory(username, relPath = '') {
         }
       } catch (_) {/* ignore stat errors */}
 
+      const itemRelPath = path.posix.join(relPath || '', entry.name);
+      const lock = locksMap[itemRelPath] || null;
+
       return {
         name: entry.name,
         isDirectory: entry.isDirectory(),
         size,
         modified: mtime,
         ext: entry.isFile() ? path.extname(entry.name).toLowerCase().slice(1) : null,
-        path: path.posix.join(relPath || '', entry.name),
+        path: itemRelPath,
+        lock: lock ? { lockedBy: lock.lockedBy, lockedAt: lock.lockedAt } : null,
       };
     })
   );
@@ -146,8 +162,13 @@ function streamSharedFile(absolutePath, res) {
   stream.pipe(res);
 }
 
-// Delete a file or directory
+// Delete a file or directory (with lock check)
 async function deleteItem(username, relPath) {
+  const db = require('./db');
+  const lock = await db.getFileLock(username, relPath);
+  if (lock && lock.lockedBy !== username) {
+    throw new Error(`File is locked by ${lock.lockedBy}. Unlock it first.`);
+  }
   const target = resolveSafe(username, relPath);
   const stat = await fs.stat(target);
   if (stat.isDirectory()) {
@@ -155,10 +176,17 @@ async function deleteItem(username, relPath) {
   } else {
     await fs.unlink(target);
   }
+  // Release lock if this user had it locked
+  if (lock) await db.unlockFile(username, relPath);
 }
 
-// Rename or move a file/folder
+// Rename or move a file/folder (with lock check)
 async function renameItem(username, relOldPath, newName) {
+  const db = require('./db');
+  const lock = await db.getFileLock(username, relOldPath);
+  if (lock && lock.lockedBy !== username) {
+    throw new Error(`File is locked by ${lock.lockedBy}. Unlock it first.`);
+  }
   const oldPath = resolveSafe(username, relOldPath);
   const parentDir = path.dirname(oldPath);
   const newPath = path.join(parentDir, newName);
@@ -166,6 +194,8 @@ async function renameItem(username, relOldPath, newName) {
   const home = getUserHome(username);
   if (!newPath.startsWith(home)) throw new Error('Invalid rename target');
   await fs.rename(oldPath, newPath);
+  // Release old lock since path changed
+  if (lock) await db.unlockFile(username, relOldPath);
 }
 
 // Create a new directory
@@ -190,8 +220,13 @@ async function isFile(username, relPath) {
   }
 }
 
-// Move a file or folder to a new directory
+// Move a file or folder to a new directory (with lock check)
 async function moveItem(username, relSrc, relDestDir) {
+  const db = require('./db');
+  const lock = await db.getFileLock(username, relSrc);
+  if (lock && lock.lockedBy !== username) {
+    throw new Error(`File is locked by ${lock.lockedBy}. Unlock it first.`);
+  }
   const srcPath = resolveSafe(username, relSrc);
   const destDirPath = resolveSafe(username, relDestDir === undefined ? '' : relDestDir);
   const fileName = path.basename(srcPath);
@@ -199,6 +234,8 @@ async function moveItem(username, relSrc, relDestDir) {
   if (destPath === srcPath) throw new Error('Source and destination are the same');
   await fs.mkdir(destDirPath, { recursive: true });
   await fs.rename(srcPath, destPath);
+  // Release lock (path is now different)
+  if (lock) await db.unlockFile(username, relSrc);
 }
 
 // Recursively search files/folders by name (max 100 results)
@@ -295,12 +332,81 @@ async function emptyTrash(username) {
   }
 }
 
-// Save/update text content of a file securely
+// Save/update text content of a file securely (with lock check)
 async function updateFileContent(username, relPath, content) {
+  const db = require('./db');
+  const lock = await db.getFileLock(username, relPath);
+  if (lock && lock.lockedBy !== username) {
+    throw new Error(`File is locked by ${lock.lockedBy}. Unlock it first.`);
+  }
   const filePath = resolveSafe(username, relPath);
   const stat = await fs.stat(filePath);
   if (!stat.isFile()) throw new Error('Target is not a file');
   await fs.writeFile(filePath, content, 'utf-8');
+}
+
+// ─── Backup & Recovery Manager ──────────────────────────────────────────────
+
+// Create a full zip backup of data/ and storage/users/
+async function createBackup() {
+  await fs.mkdir(BACKUPS_DIR, { recursive: true });
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const backupName = `nexdrop-backup-${timestamp}.zip`;
+  const backupPath = path.join(BACKUPS_DIR, backupName);
+
+  return new Promise((resolve, reject) => {
+    const output = fsSync.createWriteStream(backupPath);
+    const archive = archiver('zip', { zlib: { level: 6 } });
+
+    output.on('close', () => resolve({ name: backupName, size: archive.pointer(), path: backupPath }));
+    archive.on('error', reject);
+    archive.pipe(output);
+
+    // Include data directory (JSON databases)
+    if (fsSync.existsSync(DATA_DIR)) {
+      archive.directory(DATA_DIR, 'data');
+    }
+
+    // Include user storage (excluding trash contents to save space)
+    if (fsSync.existsSync(STORAGE_ROOT)) {
+      archive.directory(STORAGE_ROOT, 'storage/users');
+    }
+
+    archive.finalize();
+  });
+}
+
+// List all available backups
+async function listBackups() {
+  try {
+    await fs.mkdir(BACKUPS_DIR, { recursive: true });
+    const files = await fs.readdir(BACKUPS_DIR);
+    const backups = [];
+    for (const f of files) {
+      if (!f.endsWith('.zip')) continue;
+      const fullPath = path.join(BACKUPS_DIR, f);
+      const stat = await fs.stat(fullPath);
+      backups.push({
+        name: f,
+        size: stat.size,
+        createdAt: stat.mtime.toISOString(),
+      });
+    }
+    return backups.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  } catch (_) {
+    return [];
+  }
+}
+
+// Delete a backup file
+async function deleteBackup(filename) {
+  // Strictly sanitize filename to prevent path traversal
+  const safeName = path.basename(filename);
+  if (!safeName.endsWith('.zip') || !safeName.startsWith('nexdrop-backup-')) {
+    throw new Error('Invalid backup filename');
+  }
+  const fullPath = path.join(BACKUPS_DIR, safeName);
+  await fs.unlink(fullPath);
 }
 
 module.exports = {
@@ -325,4 +431,12 @@ module.exports = {
   restoreFromTrash,
   emptyTrash,
   updateFileContent,
+
+  // Backup & Recovery
+  createBackup,
+  listBackups,
+  deleteBackup,
+  BACKUPS_DIR,
+  DATA_DIR,
+  STORAGE_ROOT,
 };

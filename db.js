@@ -29,6 +29,10 @@ const FILES = {
   logs: path.join(DATA_DIR, 'logs.json'),
   collaborators: path.join(DATA_DIR, 'collaborators.json'),
   trash: path.join(DATA_DIR, 'trash_index.json'),
+  locks: path.join(DATA_DIR, 'locks.json'),
+  nfsExports: path.join(DATA_DIR, 'nfs_exports.json'),
+  smbShares: path.join(DATA_DIR, 'smb_shares.json'),
+  settings: path.join(DATA_DIR, 'settings.json'),
 };
 
 // ─── Atomic JSON helpers ────────────────────────────────────────────────────
@@ -176,6 +180,55 @@ async function init() {
       );
     `);
 
+    // 6. File Locks table (concurrent access control)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS locks (
+        id VARCHAR(100) PRIMARY KEY,
+        owner VARCHAR(50) NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+        "filePath" TEXT NOT NULL,
+        "lockedBy" VARCHAR(50) NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+        "lockedAt" VARCHAR(100) NOT NULL,
+        CONSTRAINT unique_lock UNIQUE(owner, "filePath")
+      );
+    `);
+
+    // 7. NFS Exports table (virtual NFS export map)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS nfs_exports (
+        id VARCHAR(100) PRIMARY KEY,
+        owner VARCHAR(50) NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+        "filePath" TEXT NOT NULL,
+        "allowedIPs" TEXT NOT NULL DEFAULT '*',
+        "accessLevel" VARCHAR(10) NOT NULL DEFAULT 'ro',
+        squash VARCHAR(20) NOT NULL DEFAULT 'root_squash',
+        active BOOLEAN NOT NULL DEFAULT true,
+        "createdAt" VARCHAR(100) NOT NULL
+      );
+    `);
+
+    // 8. SMB Shares table (virtual Samba/CIFS shares)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS smb_shares (
+        id VARCHAR(100) PRIMARY KEY,
+        owner VARCHAR(50) NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+        "shareName" VARCHAR(100) NOT NULL,
+        "filePath" TEXT NOT NULL,
+        comment TEXT NOT NULL DEFAULT '',
+        "guestOk" BOOLEAN NOT NULL DEFAULT false,
+        "accessLevel" VARCHAR(10) NOT NULL DEFAULT 'ro',
+        active BOOLEAN NOT NULL DEFAULT true,
+        "createdAt" VARCHAR(100) NOT NULL
+      );
+    `);
+
+    // 9. System Settings table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS settings (
+        key VARCHAR(100) PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
+
     console.log('PostgreSQL database schemas configured.');
     await migrate();
   } else {
@@ -184,10 +237,11 @@ async function init() {
     
     // Ensure all local files have base structure
     for (const key of Object.keys(FILES)) {
+      const defaultVal = key === 'settings' ? {} : [];
       try {
         await fs.access(FILES[key]);
       } catch {
-        await writeJSON(FILES[key], []);
+        await writeJSON(FILES[key], defaultVal);
       }
     }
 
@@ -547,6 +601,222 @@ async function deleteTrashEntry(username, id) {
   }
 }
 
+// ─── File Locks API ─────────────────────────────────────────────────────────
+
+async function getFileLocks(owner) {
+  if (isPG) {
+    const res = await pool.query('SELECT * FROM locks WHERE owner = $1', [owner]);
+    return res.rows;
+  } else {
+    const locks = await readJSON(FILES.locks);
+    return locks.filter(l => l.owner === owner);
+  }
+}
+
+async function getFileLock(owner, filePath) {
+  if (isPG) {
+    const res = await pool.query('SELECT * FROM locks WHERE owner = $1 AND "filePath" = $2', [owner, filePath]);
+    return res.rows[0] || null;
+  } else {
+    const locks = await readJSON(FILES.locks);
+    return locks.find(l => l.owner === owner && l.filePath === filePath) || null;
+  }
+}
+
+async function lockFile(owner, filePath, lockedBy) {
+  const id = uuidv4();
+  const lockedAt = new Date().toISOString();
+  if (isPG) {
+    await pool.query(
+      `INSERT INTO locks (id, owner, "filePath", "lockedBy", "lockedAt")
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (owner, "filePath") DO UPDATE SET "lockedBy" = EXCLUDED."lockedBy", "lockedAt" = EXCLUDED."lockedAt"`,
+      [id, owner, filePath, lockedBy, lockedAt]
+    );
+  } else {
+    const locks = await readJSON(FILES.locks);
+    const idx = locks.findIndex(l => l.owner === owner && l.filePath === filePath);
+    if (idx !== -1) {
+      locks[idx] = { ...locks[idx], lockedBy, lockedAt };
+    } else {
+      locks.push({ id, owner, filePath, lockedBy, lockedAt });
+    }
+    await writeJSON(FILES.locks, locks);
+  }
+}
+
+async function unlockFile(owner, filePath) {
+  if (isPG) {
+    await pool.query('DELETE FROM locks WHERE owner = $1 AND "filePath" = $2', [owner, filePath]);
+  } else {
+    const locks = await readJSON(FILES.locks);
+    const filtered = locks.filter(l => !(l.owner === owner && l.filePath === filePath));
+    await writeJSON(FILES.locks, filtered);
+  }
+}
+
+async function unlockAllByUser(username) {
+  if (isPG) {
+    await pool.query('DELETE FROM locks WHERE "lockedBy" = $1', [username]);
+  } else {
+    const locks = await readJSON(FILES.locks);
+    const filtered = locks.filter(l => l.lockedBy !== username);
+    await writeJSON(FILES.locks, filtered);
+  }
+}
+
+// ─── NFS Exports API ────────────────────────────────────────────────────────
+
+async function getNFSExports(owner) {
+  if (isPG) {
+    const res = await pool.query('SELECT * FROM nfs_exports WHERE owner = $1 ORDER BY "createdAt" DESC', [owner]);
+    return res.rows;
+  } else {
+    const exports = await readJSON(FILES.nfsExports);
+    return exports.filter(e => e.owner === owner);
+  }
+}
+
+async function getAllNFSExports() {
+  if (isPG) {
+    const res = await pool.query('SELECT * FROM nfs_exports ORDER BY "createdAt" DESC');
+    return res.rows;
+  } else {
+    return await readJSON(FILES.nfsExports);
+  }
+}
+
+async function createNFSExport(data) {
+  const id = uuidv4();
+  const entry = { id, createdAt: new Date().toISOString(), ...data };
+  if (isPG) {
+    await pool.query(
+      `INSERT INTO nfs_exports (id, owner, "filePath", "allowedIPs", "accessLevel", squash, active, "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [entry.id, entry.owner, entry.filePath, entry.allowedIPs || '*', entry.accessLevel || 'ro',
+       entry.squash || 'root_squash', entry.active !== false, entry.createdAt]
+    );
+  } else {
+    const exports = await readJSON(FILES.nfsExports);
+    exports.push(entry);
+    await writeJSON(FILES.nfsExports, exports);
+  }
+  return entry;
+}
+
+async function updateNFSExport(id, updates) {
+  if (isPG) {
+    const fields = Object.keys(updates);
+    if (!fields.length) return;
+    const setClause = fields.map((f, i) => `"${f}" = $${i + 2}`).join(', ');
+    await pool.query(`UPDATE nfs_exports SET ${setClause} WHERE id = $1`, [id, ...fields.map(f => updates[f])]);
+  } else {
+    const exports = await readJSON(FILES.nfsExports);
+    const idx = exports.findIndex(e => e.id === id);
+    if (idx !== -1) { exports[idx] = { ...exports[idx], ...updates }; }
+    await writeJSON(FILES.nfsExports, exports);
+  }
+}
+
+async function deleteNFSExport(id) {
+  if (isPG) {
+    await pool.query('DELETE FROM nfs_exports WHERE id = $1', [id]);
+  } else {
+    const exports = await readJSON(FILES.nfsExports);
+    await writeJSON(FILES.nfsExports, exports.filter(e => e.id !== id));
+  }
+}
+
+// ─── SMB Shares API ─────────────────────────────────────────────────────────
+
+async function getSMBShares(owner) {
+  if (isPG) {
+    const res = await pool.query('SELECT * FROM smb_shares WHERE owner = $1 ORDER BY "createdAt" DESC', [owner]);
+    return res.rows;
+  } else {
+    const shares = await readJSON(FILES.smbShares);
+    return shares.filter(s => s.owner === owner);
+  }
+}
+
+async function getAllSMBShares() {
+  if (isPG) {
+    const res = await pool.query('SELECT * FROM smb_shares ORDER BY "createdAt" DESC');
+    return res.rows;
+  } else {
+    return await readJSON(FILES.smbShares);
+  }
+}
+
+async function createSMBShare(data) {
+  const id = uuidv4();
+  const entry = { id, createdAt: new Date().toISOString(), ...data };
+  if (isPG) {
+    await pool.query(
+      `INSERT INTO smb_shares (id, owner, "shareName", "filePath", comment, "guestOk", "accessLevel", active, "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [entry.id, entry.owner, entry.shareName, entry.filePath, entry.comment || '',
+       entry.guestOk === true, entry.accessLevel || 'ro', entry.active !== false, entry.createdAt]
+    );
+  } else {
+    const shares = await readJSON(FILES.smbShares);
+    shares.push(entry);
+    await writeJSON(FILES.smbShares, shares);
+  }
+  return entry;
+}
+
+async function updateSMBShare(id, updates) {
+  if (isPG) {
+    const fields = Object.keys(updates);
+    if (!fields.length) return;
+    const setClause = fields.map((f, i) => `"${f}" = $${i + 2}`).join(', ');
+    await pool.query(`UPDATE smb_shares SET ${setClause} WHERE id = $1`, [id, ...fields.map(f => updates[f])]);
+  } else {
+    const shares = await readJSON(FILES.smbShares);
+    const idx = shares.findIndex(s => s.id === id);
+    if (idx !== -1) { shares[idx] = { ...shares[idx], ...updates }; }
+    await writeJSON(FILES.smbShares, shares);
+  }
+}
+
+async function deleteSMBShare(id) {
+  if (isPG) {
+    await pool.query('DELETE FROM smb_shares WHERE id = $1', [id]);
+  } else {
+    const shares = await readJSON(FILES.smbShares);
+    await writeJSON(FILES.smbShares, shares.filter(s => s.id !== id));
+  }
+}
+
+// ─── System Settings API ────────────────────────────────────────────────────
+
+async function getSystemSetting(key, defaultValue = null) {
+  if (isPG) {
+    const res = await pool.query('SELECT value FROM settings WHERE key = $1', [key]);
+    if (!res.rows[0]) return defaultValue;
+    try { return JSON.parse(res.rows[0].value); } catch { return res.rows[0].value; }
+  } else {
+    const settings = await readJSON(FILES.settings, {});
+    if (!(key in settings)) return defaultValue;
+    return settings[key];
+  }
+}
+
+async function updateSystemSetting(key, value) {
+  const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+  if (isPG) {
+    await pool.query(
+      `INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [key, serialized]
+    );
+  } else {
+    const settings = await readJSON(FILES.settings, {});
+    settings[key] = value;
+    await writeJSON(FILES.settings, settings);
+  }
+}
+
 module.exports = {
   init,
   getUsers,
@@ -575,5 +845,30 @@ module.exports = {
   getTrashEntries,
   getTrashEntryById,
   deleteTrashEntry,
+
+  // File Locks
+  getFileLocks,
+  getFileLock,
+  lockFile,
+  unlockFile,
+  unlockAllByUser,
+
+  // NFS Exports
+  getNFSExports,
+  getAllNFSExports,
+  createNFSExport,
+  updateNFSExport,
+  deleteNFSExport,
+
+  // SMB Shares
+  getSMBShares,
+  getAllSMBShares,
+  createSMBShare,
+  updateSMBShare,
+  deleteSMBShare,
+
+  // System Settings
+  getSystemSetting,
+  updateSystemSetting,
 };
 

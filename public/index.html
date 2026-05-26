@@ -104,7 +104,10 @@
         <i data-lucide="bar-chart-2"></i> <span>Analytics</span>
       </a>
       <a href="#" class="nav-item" id="nav-webdav" onclick="switchView('webdav', event)">
-        <i data-lucide="network"></i> <span>Network Drive</span>
+        <i data-lucide="network"></i> <span>File Protocols</span>
+      </a>
+      <a href="#" class="nav-item admin-only hidden" id="nav-backups" onclick="switchView('backups', event)">
+        <i data-lucide="shield-check"></i> <span>Backups &amp; Security</span>
       </a>
       <a href="#" class="nav-item admin-only hidden" id="nav-admin" onclick="switchView('admin', event)">
         <i data-lucide="shield"></i> <span>Admin Panel</span>
@@ -333,77 +336,368 @@
       </div>
     </section>
 
-    <!-- ── WEBDAV / NETWORK DRIVE VIEW ── -->
+    <!-- ── WEBDAV / NETWORK PROTOCOLS VIEW ── -->
     <section id="view-webdav" class="view hidden">
       <div class="topbar">
         <div class="topbar-left">
           <button class="hamburger btn-icon" onclick="toggleSidebar()">
             <i data-lucide="menu"></i>
           </button>
-          <h2 class="view-title">Network Drive</h2>
+          <h2 class="view-title">File Protocols</h2>
         </div>
       </div>
 
-      <div class="admin-section glass" style="margin-top:0.5rem; max-width:800px; padding: 2rem;">
-        <h3 class="admin-section-title" style="font-size: 1.35rem; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;"><i data-lucide="network"></i> Mount NexDrop as a Network Drive</h3>
-        <p style="color: var(--text-muted); line-height: 1.6; margin-bottom: 1.5rem; font-size: 0.95rem;">
-          NexDrop supports the standard **WebDAV** protocol. You can access and manage your files directly from your computer's native file explorer (Windows Explorer, macOS Finder, or Linux Files) just like a local USB drive.
-        </p>
+      <!-- Protocol Tab Switcher -->
+      <div class="protocol-tabs">
+        <button class="protocol-tab active" id="ptab-webdav" onclick="switchProtocolTab('webdav')"><i data-lucide="globe"></i> WebDAV</button>
+        <button class="protocol-tab" id="ptab-smb" onclick="switchProtocolTab('smb')"><i data-lucide="monitor"></i> SMB / CIFS</button>
+        <button class="protocol-tab" id="ptab-nfs" onclick="switchProtocolTab('nfs')"><i data-lucide="server"></i> NFS Exports</button>
+      </div>
 
-        <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); padding: 1.25rem; border-radius: 8px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem; gap: 1rem; flex-wrap: wrap;">
-          <div style="flex: 1; min-width: 250px;">
-            <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.35rem; text-transform: uppercase; letter-spacing: 0.5px;">Your Personal WebDAV URL</span>
-            <code id="webdav-url-display" style="font-family: monospace; font-size: 1.05rem; color: var(--primary); font-weight: 600; word-break: break-all;">http://localhost:3000/webdav</code>
+      <!-- WebDAV Panel -->
+      <div id="proto-panel-webdav" class="proto-panel">
+        <div class="admin-section glass proto-card">
+          <h3 class="admin-section-title"><i data-lucide="network"></i> Mount NexDrop as a Network Drive (WebDAV)</h3>
+          <p class="proto-desc">NexDrop supports the standard <strong>WebDAV</strong> protocol (RFC 4918). Access your files directly from Windows Explorer, macOS Finder, or Linux Files — just like a local USB drive. WebDAV supports file locking (LOCK/UNLOCK) and property management (PROPPATCH).</p>
+
+          <div class="webdav-url-box">
+            <div>
+              <span class="url-label">Your Personal WebDAV Endpoint</span>
+              <code id="webdav-url-display">http://localhost:3000/webdav</code>
+            </div>
+            <button class="btn btn-primary" onclick="copyWebDAVUrl()"><i data-lucide="copy"></i> Copy URL</button>
           </div>
-          <button class="btn btn-primary" onclick="copyWebDAVUrl()" style="padding: 0.6rem 1.2rem; display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem;">
-            <i data-lucide="copy" style="width: 16px; height: 16px;"></i> Copy URL
+
+          <div class="proto-badge-row">
+            <span class="proto-badge badge-green"><i data-lucide="check-circle"></i> RFC 4918 Compliant</span>
+            <span class="proto-badge badge-blue"><i data-lucide="lock"></i> File Locking (LOCK/UNLOCK)</span>
+            <span class="proto-badge badge-purple"><i data-lucide="zap"></i> Quota Enforcement</span>
+          </div>
+
+          <h4 class="mount-os-title"><i data-lucide="help-circle"></i> How to Mount on Your OS</h4>
+          <div class="mount-os-tabs">
+            <button class="btn btn-ghost active" id="btn-mount-win" onclick="switchMountInstructions('win')">Windows</button>
+            <button class="btn btn-ghost" id="btn-mount-mac" onclick="switchMountInstructions('mac')">macOS</button>
+            <button class="btn btn-ghost" id="btn-mount-linux" onclick="switchMountInstructions('linux')">Linux</button>
+          </div>
+          <div id="instructions-win" class="mount-inst">
+            <ol>
+              <li>Open <strong>This PC</strong> in Windows File Explorer.</li>
+              <li>Click <strong>Computer</strong> in the top ribbon → <strong>Map network drive</strong>.</li>
+              <li>Select a drive letter (e.g., <code>Z:</code>).</li>
+              <li>In the <strong>Folder</strong> field, paste your WebDAV URL above.</li>
+              <li>Check <strong>Reconnect at sign-in</strong> and <strong>Connect using different credentials</strong> → <strong>Finish</strong>.</li>
+              <li>Enter your NexDrop username and password when prompted.</li>
+            </ol>
+          </div>
+          <div id="instructions-mac" class="mount-inst hidden">
+            <ol>
+              <li>Open <strong>Finder</strong> on your Mac.</li>
+              <li>Press <strong>Cmd + K</strong> (or Go → Connect to Server…).</li>
+              <li>Paste your WebDAV URL in the Server Address box.</li>
+              <li>Click <strong>Connect</strong>, select <strong>Registered User</strong>.</li>
+              <li>Enter your NexDrop username and password → <strong>Connect</strong>.</li>
+            </ol>
+          </div>
+          <div id="instructions-linux" class="mount-inst hidden">
+            <ol>
+              <li>Open your file manager (GNOME Files / Nautilus).</li>
+              <li>Click <strong>+ Other Locations</strong> in the sidebar.</li>
+              <li>In the Connect to Server box, enter:<br>
+                <code style="color:var(--primary)">dav://localhost:3000/webdav</code>
+              </li>
+              <li>Click <strong>Connect</strong>, enter credentials when prompted.</li>
+            </ol>
+          </div>
+        </div>
+      </div>
+
+      <!-- SMB / CIFS Panel -->
+      <div id="proto-panel-smb" class="proto-panel hidden">
+        <div class="admin-section glass proto-card">
+          <h3 class="admin-section-title"><i data-lucide="monitor"></i> SMB / CIFS Virtual Shares</h3>
+          <p class="proto-desc">Server Message Block (SMB) is the native file sharing protocol for Windows networks. Configure virtual SMB-style share mappings for your directories. These define how folders would be exported via SMB if integrated with a Samba server.</p>
+
+          <div class="proto-badge-row">
+            <span class="proto-badge badge-blue"><i data-lucide="info"></i> SMBv3 Compatible Config</span>
+            <span class="proto-badge badge-purple"><i data-lucide="users"></i> Multi-User Access Control</span>
+            <span class="proto-badge badge-green"><i data-lucide="shield"></i> Guest Access Toggleable</span>
+          </div>
+
+          <div class="proto-form glass">
+            <h4 style="margin-bottom:1rem;"><i data-lucide="plus-circle"></i> Add New SMB Share</h4>
+            <div class="proto-form-grid">
+              <div class="input-group">
+                <i data-lucide="folder" class="input-icon"></i>
+                <input id="smb-path" type="text" placeholder="Directory path (e.g. Documents)" />
+              </div>
+              <div class="input-group">
+                <i data-lucide="tag" class="input-icon"></i>
+                <input id="smb-name" type="text" placeholder="Share name (e.g. MyDocs)" />
+              </div>
+              <div class="input-group">
+                <i data-lucide="message-square" class="input-icon"></i>
+                <input id="smb-comment" type="text" placeholder="Comment (optional)" />
+              </div>
+              <div style="display:flex;gap:.75rem;align-items:center;">
+                <select id="smb-access" class="form-select" style="flex:1;">
+                  <option value="ro">Read Only (ro)</option>
+                  <option value="rw">Read/Write (rw)</option>
+                </select>
+                <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;color:var(--text-muted);white-space:nowrap;">
+                  <input type="checkbox" id="smb-guest" /> Guest OK
+                </label>
+              </div>
+            </div>
+            <button class="btn btn-primary" onclick="createSMBShare()" style="margin-top:.75rem;">
+              <i data-lucide="plus"></i> Create Share
+            </button>
+          </div>
+
+          <div id="smb-list" class="proto-list">
+            <div class="proto-list-empty"><i data-lucide="monitor"></i><p>No SMB shares configured yet</p></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- NFS Exports Panel -->
+      <div id="proto-panel-nfs" class="proto-panel hidden">
+        <div class="admin-section glass proto-card">
+          <h3 class="admin-section-title"><i data-lucide="server"></i> NFS Export Configuration</h3>
+          <p class="proto-desc">Network File System (NFS) allows Linux/Unix clients to mount directories over the network. Configure your virtual <code>/etc/exports</code> rules below. These define export paths, client IP restrictions, access levels, and UID squashing behavior (root_squash, no_root_squash, all_squash).</p>
+
+          <div class="proto-badge-row">
+            <span class="proto-badge badge-green"><i data-lucide="server"></i> NFSv3/v4 Compatible</span>
+            <span class="proto-badge badge-blue"><i data-lucide="wifi"></i> IP Allowlist Control</span>
+            <span class="proto-badge badge-purple"><i data-lucide="user-x"></i> UID Squashing</span>
+          </div>
+
+          <div class="proto-form glass">
+            <h4 style="margin-bottom:1rem;"><i data-lucide="plus-circle"></i> Add NFS Export</h4>
+            <div class="proto-form-grid">
+              <div class="input-group">
+                <i data-lucide="folder" class="input-icon"></i>
+                <input id="nfs-path" type="text" placeholder="Export path (e.g. Projects)" />
+              </div>
+              <div class="input-group">
+                <i data-lucide="wifi" class="input-icon"></i>
+                <input id="nfs-ips" type="text" placeholder="Allowed IPs (e.g. 192.168.1.0/24 or *)" />
+              </div>
+              <div style="display:flex;gap:.75rem;">
+                <select id="nfs-access" class="form-select" style="flex:1;">
+                  <option value="ro">Read Only (ro)</option>
+                  <option value="rw">Read/Write (rw)</option>
+                </select>
+                <select id="nfs-squash" class="form-select" style="flex:1;">
+                  <option value="root_squash">root_squash</option>
+                  <option value="no_root_squash">no_root_squash</option>
+                  <option value="all_squash">all_squash</option>
+                </select>
+              </div>
+            </div>
+            <button class="btn btn-primary" onclick="createNFSExport()" style="margin-top:.75rem;">
+              <i data-lucide="plus"></i> Add Export
+            </button>
+          </div>
+
+          <div class="exports-file glass" style="margin-top:1.5rem;padding:1.25rem;border-radius:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;">
+              <h4 style="font-size:.9rem;color:var(--text-muted);">/etc/exports — Virtual Export Map</h4>
+              <span class="proto-badge badge-green" id="nfs-export-count">0 exports</span>
+            </div>
+            <div id="nfs-exports-file" style="font-family:monospace;font-size:.85rem;color:#a8d8a8;line-height:1.8;"><!-- populated by JS --></div>
+          </div>
+
+          <div id="nfs-list" class="proto-list" style="margin-top:1.5rem;">
+            <div class="proto-list-empty"><i data-lucide="server"></i><p>No NFS exports configured yet</p></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Host Deploy Configurations Exporter -->
+      <div class="admin-section glass proto-card" style="margin-top: 1.5rem; display: none;" id="proto-export-card">
+        <h3 class="admin-section-title"><i data-lucide="download"></i> Export Host Server Configurations</h3>
+        <p class="proto-desc" style="margin-bottom: 1rem;">Export and synchronize NexDrop's virtual protocol definitions into real host configurations. These are live-compiled based on active dashboard mappings.</p>
+        
+        <div style="display: flex; flex-direction: column; gap: 1.25rem;">
+          <!-- Samba Config -->
+          <div class="exports-file glass" style="padding:1.25rem;border-radius:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;">
+              <h4 style="font-size:.9rem;color:var(--text-muted);">Samba /etc/samba/smb.conf</h4>
+              <button class="btn btn-ghost" style="padding:.25rem .5rem; font-size:.75rem;" onclick="copyHostConfig('smb')"><i data-lucide="copy"></i> Copy Configuration</button>
+            </div>
+            <pre id="host-smb-config" style="font-family:monospace;font-size:.8rem;color:#e0a0f0;overflow-x:auto;max-height:180px;white-space:pre-wrap;text-align:left;"></pre>
+          </div>
+
+          <!-- NFS Config -->
+          <div class="exports-file glass" style="padding:1.25rem;border-radius:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;">
+              <h4 style="font-size:.9rem;color:var(--text-muted);">NFS /etc/exports</h4>
+              <button class="btn btn-ghost" style="padding:.25rem .5rem; font-size:.75rem;" onclick="copyHostConfig('nfs')"><i data-lucide="copy"></i> Copy Configuration</button>
+            </div>
+            <pre id="host-nfs-config" style="font-family:monospace;font-size:.8rem;color:#a8d8a8;overflow-x:auto;max-height:180px;white-space:pre-wrap;text-align:left;"></pre>
+          </div>
+
+          <!-- Deployment Sync Script -->
+          <div class="exports-file glass" style="padding:1.25rem;border-radius:10px; border: 1px dashed var(--border-light);">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;">
+              <div>
+                <h4 style="font-size:.9rem;color:var(--primary); font-weight:600;"><i data-lucide="terminal"></i> Host Auto-Sync Script</h4>
+                <p style="font-size:.75rem;color:var(--text-muted); margin-top:.2rem;">Automates system daemon reloading and path setup.</p>
+              </div>
+              <button class="btn btn-primary" style="padding:.35rem .75rem; font-size:.8rem;" onclick="downloadDeployScript()"><i data-lucide="download-cloud"></i> Download Sync Script</button>
+            </div>
+            <pre id="host-sync-script" style="font-family:monospace;font-size:.75rem;color:#8abeb7;overflow-x:auto;max-height:180px; padding:.5rem; background:#181824; border-radius:5px; white-space:pre-wrap; text-align:left;"></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── BACKUPS & SECURITY VIEW ── -->
+    <section id="view-backups" class="view hidden">
+      <div class="topbar">
+        <div class="topbar-left">
+          <button class="hamburger btn-icon" onclick="toggleSidebar()">
+            <i data-lucide="menu"></i>
+          </button>
+          <h2 class="view-title">Backups &amp; Security</h2>
+        </div>
+        <button class="btn btn-ghost" onclick="refreshBackupsView()">
+          <i data-lucide="refresh-cw"></i> Refresh
+        </button>
+      </div>
+
+      <!-- Security Score Header -->
+      <div class="security-score-banner glass" id="security-score-banner">
+        <div class="score-ring-wrap">
+          <svg class="score-ring" viewBox="0 0 120 120">
+            <circle class="score-ring-bg" cx="60" cy="60" r="52"/>
+            <circle class="score-ring-fill" id="score-ring-fill" cx="60" cy="60" r="52" style="stroke-dasharray:326.73;stroke-dashoffset:326.73;"/>
+          </svg>
+          <div class="score-center">
+            <span class="score-number" id="sec-score-number">—</span>
+            <span class="score-label-txt">/ 100</span>
+          </div>
+        </div>
+        <div class="score-info">
+          <h3 id="sec-score-title">Security Score</h3>
+          <p id="sec-score-desc" class="score-desc">Calculating your server security posture…</p>
+          <div class="score-meta-row">
+            <span class="proto-badge badge-blue" id="sec-platform"><i data-lucide="server"></i> —</span>
+            <span class="proto-badge badge-purple" id="sec-uptime"><i data-lucide="clock"></i> —</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="backups-security-grid">
+        <!-- Security Audit Checklist -->
+        <div class="admin-section glass">
+          <h3 class="admin-section-title"><i data-lucide="clipboard-check"></i> Security Audit</h3>
+          <div id="security-checklist" class="security-checklist">
+            <!-- populated by JS -->
+          </div>
+        </div>
+
+        <!-- Ransomware Shield -->
+        <div class="admin-section glass">
+          <h3 class="admin-section-title"><i data-lucide="shield-check"></i> Ransomware Shield</h3>
+          <div class="shield-panel">
+            <div class="shield-status" id="shield-status-indicator">
+              <div class="shield-icon-wrap" id="shield-icon-wrap">
+                <i data-lucide="shield" id="shield-main-icon"></i>
+              </div>
+              <div>
+                <p class="shield-status-text" id="shield-status-text">Checking…</p>
+                <p class="shield-desc">Monitors file write velocity and extension patterns in real-time to block ransomware attacks.</p>
+              </div>
+            </div>
+            <div class="shield-toggle-row">
+              <span style="font-size:.9rem;color:var(--text-muted);">Shield Active</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="shield-toggle" onchange="toggleRansomwareShield(this.checked)" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="shield-info-box">
+              <p><strong>Triggers on:</strong></p>
+              <ul>
+                <li>Files with ransomware extensions (.locked, .wcry, .enc, .crypto…)</li>
+                <li>Velocity &gt; 15 write operations in 10 seconds</li>
+                <li>Automatically suspends user account &amp; logs critical alert</li>
+              </ul>
+            </div>
+            
+            <div class="shield-form" style="margin-top:1.25rem; padding-top:1.25rem; border-top: 1px solid var(--border-light);">
+              <h4 style="font-size:.85rem; color:var(--text-muted); margin-bottom:.75rem; display:flex; align-items:center; gap:.4rem;"><i data-lucide="sliders" style="width:14px; height:14px;"></i> Customize Shield Rules</h4>
+              <div style="display:flex; flex-direction:column; gap:.75rem;">
+                <div style="display:flex; gap:.5rem;">
+                  <div style="flex:1;">
+                    <label style="font-size:.7rem; color:var(--text-muted); display:block; margin-bottom:.25rem;">Velocity Limit (Ops)</label>
+                    <input type="number" id="sec-rule-velocity" class="form-input" style="padding:.35rem .5rem; font-size:.8rem; background:#181824; border-radius:5px; width: 100%; border: 1px solid var(--border-light);" min="1" />
+                  </div>
+                  <div style="flex:1;">
+                    <label style="font-size:.7rem; color:var(--text-muted); display:block; margin-bottom:.25rem;">Window Size (Sec)</label>
+                    <input type="number" id="sec-rule-window" class="form-input" style="padding:.35rem .5rem; font-size:.8rem; background:#181824; border-radius:5px; width: 100%; border: 1px solid var(--border-light);" min="1" />
+                  </div>
+                </div>
+                <div>
+                  <label style="font-size:.7rem; color:var(--text-muted); display:block; margin-bottom:.25rem;">Blocked Extensions (comma separated)</label>
+                  <textarea id="sec-rule-exts" class="form-input" style="padding:.35rem .5rem; font-size:.75rem; font-family:monospace; resize:none; height:60px; background:#181824; border-radius:5px; width: 100%; border: 1px solid var(--border-light); color:#dfdfe8;"></textarea>
+                </div>
+                <button class="btn btn-primary" style="padding:.35rem .75rem; font-size:.8rem; align-self:flex-end;" onclick="saveSecurityRules()"><i data-lucide="save"></i> Save Rules</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quarantine Management -->
+      <div class="admin-section glass" style="margin-top:1.5rem;" id="quarantine-section">
+        <h3 class="admin-section-title"><i data-lucide="user-x"></i> Quarantine Console
+          <span class="proto-badge badge-red" id="quarantine-count" style="margin-left:.5rem;font-size:.75rem;">0 quarantined</span>
+        </h3>
+        <div id="quarantine-list"><!-- populated by JS --></div>
+      </div>
+
+      <!-- System Backups -->
+      <div class="admin-section glass" style="margin-top:1.5rem;">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.75rem;margin-bottom:1.25rem;">
+          <h3 class="admin-section-title" style="margin-bottom:0;"><i data-lucide="hard-drive"></i> System Backups</h3>
+          <button class="btn btn-primary" onclick="createSystemBackup()" id="create-backup-btn">
+            <i data-lucide="download-cloud"></i> Create Backup Now
           </button>
         </div>
-
-        <h4 style="margin-bottom: 1rem; font-size: 1.1rem; color: var(--text-primary); display: flex; align-items: center; gap: 0.5rem;">
-          <i data-lucide="help-circle" style="width:18px; height:18px;"></i> How to Mount on Your OS
-        </h4>
-
-        <div style="display: flex; gap: 0.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">
-          <button class="btn btn-ghost active" id="btn-mount-win" onclick="switchMountInstructions('win')" style="padding: 0.4rem 0.9rem; font-size: 0.85rem;">Windows</button>
-          <button class="btn btn-ghost" id="btn-mount-mac" onclick="switchMountInstructions('mac')" style="padding: 0.4rem 0.9rem; font-size: 0.85rem;">macOS</button>
-          <button class="btn btn-ghost" id="btn-mount-linux" onclick="switchMountInstructions('linux')" style="padding: 0.4rem 0.9rem; font-size: 0.85rem;">Linux</button>
+        <p style="font-size:.85rem;color:var(--text-muted);margin-bottom:1.25rem;">Full system backups include all JSON databases and user file storage. Backups are stored in the <code>backups/</code> directory on the server. Best practice: keep at least 3 copies with at least one offline.</p>
+        
+        <!-- Auto Backup Scheduler & Retention Panel -->
+        <div class="exports-file glass" style="margin-bottom:1.25rem; padding:1.25rem; border-radius:10px; border: 1px dashed var(--border-light); background: rgba(24, 24, 36, 0.4);">
+          <h4 style="font-size:.9rem; color:var(--primary); font-weight:600; margin-bottom:.75rem; display:flex; align-items:center; gap:.4rem;"><i data-lucide="clock" style="width:16px; height:16px;"></i> Backup Automation & Storage Policies</h4>
+          <div style="display:flex; gap:1.25rem; flex-wrap:wrap; text-align:left;">
+            <div style="flex:1; min-width:180px;">
+              <label style="font-size:.75rem; color:var(--text-muted); display:block; margin-bottom:.35rem;">Backup Frequency (Interval Hours)</label>
+              <div style="display:flex; gap:.5rem;">
+                <input type="number" id="backup-auto-interval" class="form-input" style="padding:.35rem .5rem; font-size:.85rem; background:#181824; border-radius:5px; border: 1px solid var(--border-light); width: 80px; color:#fff;" min="0" step="0.5" value="0" />
+                <span style="font-size:.75rem; color:var(--text-muted); align-self:center;">Hours</span>
+              </div>
+              <p style="font-size:.7rem; color:var(--text-muted); margin-top:.35rem;">Set to <code>0</code> to disable automated background backups.</p>
+            </div>
+            
+            <div style="flex:1; min-width:180px;">
+              <label style="font-size:.75rem; color:var(--text-muted); display:block; margin-bottom:.35rem;">Backup Retention Limit (Max Copies)</label>
+              <div style="display:flex; gap:.5rem;">
+                <input type="number" id="backup-auto-retention" class="form-input" style="padding:.35rem .5rem; font-size:.85rem; background:#181824; border-radius:5px; border: 1px solid var(--border-light); width: 80px; color:#fff;" min="1" value="5" />
+                <span style="font-size:.75rem; color:var(--text-muted); align-self:center;">Copies</span>
+              </div>
+              <p style="font-size:.7rem; color:var(--text-muted); margin-top:.35rem;">Oldest backup files will be auto-purged beyond this limit.</p>
+            </div>
+            
+            <div style="display:flex; align-items:flex-end;">
+              <button class="btn btn-primary" style="padding:.5rem 1rem; font-size:.85rem;" onclick="saveBackupSettings()"><i data-lucide="save"></i> Save Automation Rules</button>
+            </div>
+          </div>
         </div>
-
-        <div id="instructions-win" class="mount-inst">
-          <ol style="margin-left: 1.25rem; line-height: 1.9; color: var(--text-muted); font-size: 0.9rem;">
-            <li>Open <strong>This PC</strong> in Windows File Explorer.</li>
-            <li>Click <strong>Computer</strong> in the top ribbon and select <strong>Map network drive</strong>.</li>
-            <li>Select a drive letter of your choice (e.g., <code>Z:</code>).</li>
-            <li>In the <strong>Folder</strong> input field, paste your WebDAV URL shown above.</li>
-            <li>Check both <strong>Reconnect at sign-in</strong> and <strong>Connect using different credentials</strong>, then click <strong>Finish</strong>.</li>
-            <li>When prompted, enter your NexDrop **username** and **password**.</li>
-            <li>Click OK. Your NexDrop files will now appear as a new drive under "This PC"!</li>
-          </ol>
-        </div>
-
-        <div id="instructions-mac" class="mount-inst hidden">
-          <ol style="margin-left: 1.25rem; line-height: 1.9; color: var(--text-muted); font-size: 0.9rem;">
-            <li>Open <strong>Finder</strong> on your Mac.</li>
-            <li>Press <strong>Cmd + K</strong> on your keyboard (or click <strong>Go &gt; Connect to Server...</strong> in the top menu bar).</li>
-            <li>In the <strong>Server Address</strong> box, paste your WebDAV URL shown above.</li>
-            <li>Click the <strong>Connect</strong> button.</li>
-            <li>Select <strong>Registered User</strong>.</li>
-            <li>Enter your NexDrop **username** and **password**, then click <strong>Connect</strong>.</li>
-            <li>Your storage will now mount on your Desktop and inside Finder under Locations!</li>
-          </ol>
-        </div>
-
-        <div id="instructions-linux" class="mount-inst hidden">
-          <ol style="margin-left: 1.25rem; line-height: 1.9; color: var(--text-muted); font-size: 0.9rem;">
-            <li>Open your desktop file manager (e.g., GNOME Files / Nautilus).</li>
-            <li>Click <strong>+ Other Locations</strong> at the bottom of the sidebar.</li>
-            <li>In the <strong>Connect to Server</strong> box at the bottom, enter your URL, but replace `http://` with `dav://` (or `https://` with `davs://`):<br>
-              <code style="background: rgba(255,255,255,0.05); padding: 0.15rem 0.4rem; border-radius: 4px; font-family: monospace; display: inline-block; margin: 0.25rem 0; color: var(--primary);">dav://localhost:3000/webdav</code>
-            </li>
-            <li>Click <strong>Connect</strong>.</li>
-            <li>Select **Registered User**, enter your NexDrop **username** and **password**, and click **Connect**.</li>
-          </ol>
+        <div id="backups-list" class="backups-list">
+          <div class="proto-list-empty"><i data-lucide="hard-drive"></i><p>No backups yet. Create your first backup now.</p></div>
         </div>
       </div>
     </section>
@@ -739,6 +1033,9 @@
   <div class="ctx-divider" id="ctx-div-1"></div>
   <button class="ctx-item" id="ctx-rename" onclick="ctxRename()"><i data-lucide="pencil"></i> Rename</button>
   <button class="ctx-item" id="ctx-move" onclick="ctxMove()"><i data-lucide="move"></i> Move</button>
+  <div class="ctx-divider" id="ctx-div-lock" style="display:none;"></div>
+  <button class="ctx-item" id="ctx-lock" onclick="ctxLockFile()" style="display:none;"><i data-lucide="lock"></i> Lock File</button>
+  <button class="ctx-item" id="ctx-unlock" onclick="ctxUnlockFile()" style="display:none;"><i data-lucide="unlock"></i> Unlock File</button>
   <div class="ctx-divider" id="ctx-div-2"></div>
   <button class="ctx-item danger" id="ctx-delete" onclick="ctxDelete()"><i data-lucide="trash-2"></i> Move to Trash</button>
   
